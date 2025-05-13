@@ -16,6 +16,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 import json
 import googleapiclient
+import gc  # Bellek yönetimi için garbage collector
 
 # Uygulama başlığı ve açıklaması
 st.set_page_config(page_title="Kardiyak Görüntü Değerlendirme Platformu", layout="wide")
@@ -221,13 +222,19 @@ def load_images_from_drive(drive_service, folder_id, img_type, temp_dir, max_ima
             if not file_path:
                 continue
             
-            # Standart görüntü formatları için
-            img = Image.open(file_path)
+            # Görüntü yolunu kaydet (gerçek görüntüyü şimdi yükleme)
             images.append({
                 'path': file_path,
                 'drive_id': file['id'],
                 'true_type': img_type
             })
+            
+            # Bellek kullanımını optimize etmek için her 10 görüntüde bir
+            # hafızayı temizlemeye çalış
+            if i % 10 == 0:
+                import gc
+                gc.collect()
+                
         except Exception as e:
             st.warning(f"Dosya işlenirken hata oluştu {file['name']}: {e}")
     
@@ -444,15 +451,14 @@ def display_apa_image():
         
         try:
             # Görüntü dosyasını yükle
-            img = Image.open(img_data['path'])
-            
-            # Görüntüyü yeniden boyutlandır (256x256)
-            img = img.resize((256, 256), Image.LANCZOS)
-            
-            # Görüntüyü merkeze yerleştir
-            col1, col2, col3 = st.columns([1, 2, 1])
-            with col2:
-                st.image(img, width=256)
+            with Image.open(img_data['path']) as img:
+                # Görüntüyü yeniden boyutlandır (256x256)
+                img = img.resize((256, 256), Image.LANCZOS)
+                
+                # Görüntüyü merkeze yerleştir
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col2:
+                    st.image(img, width=256)
             
             # Değerlendirme talimatı
             st.info("Lütfen aşağıdaki özellikleri 1-5 ölçeğinde değerlendirin (1: Çok Kötü, 5: Mükemmel)")
@@ -905,15 +911,14 @@ def display_vtt_image():
         
         try:
             # Standart görüntü dosyasını yükle
-            img = Image.open(img_data['path'])
-            
-            # Yeniden boyutlandır
-            img = img.resize((256, 256))
-            
-            # Görüntüyü merkeze yerleştir
-            col1, col2, col3 = st.columns([1, 2, 1])
-            with col2:
-                st.image(img, width=256)
+            with Image.open(img_data['path']) as img:
+                # Yeniden boyutlandır
+                img = img.resize((256, 256))
+                
+                # Görüntüyü merkeze yerleştir
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col2:
+                    st.image(img, width=256)
             
             # Kullanıcı talimatları
             st.info("Lütfen yukarıdaki görüntünün gerçek mi yoksa yapay zeka tarafından üretilmiş (sentetik) mi olduğunu değerlendirin.")
