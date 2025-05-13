@@ -234,8 +234,8 @@ def initialize_app():
             real_folder_id = st.session_state.real_folder_id
             synth_folder_id = st.session_state.synth_folder_id
             
-            real_images = load_images_from_drive(st.session_state.drive_service, real_folder_id, 'gerçek')
-            synth_images = load_images_from_drive(st.session_state.drive_service, synth_folder_id, 'sentetik')
+            real_images = load_images_from_drive(st.session_state.drive_service, real_folder_id, 'real')
+            synth_images = load_images_from_drive(st.session_state.drive_service, synth_folder_id, 'synthetic')
             
             # Görüntü sayısını kontrol et
             if not real_images and not synth_images:
