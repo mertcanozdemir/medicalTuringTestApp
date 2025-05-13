@@ -37,7 +37,7 @@ def authenticate_gdrive():
     # 2. Yüklenen kimlik dosyası ile
     else:
         st.warning("Google Drive kimlik bilgileri bulunamadı!")
-        uploaded_file = st.file_uploader("Service Account JSON dosyasını yükleyin:", type=['json'])
+        uploaded_file = st.file_uploader("Service Account JSON dosyasını yükleyin:", type=['json'], key="service_account_uploader")
         if uploaded_file is not None:
             credentials = Credentials.from_service_account_info(
                 eval(uploaded_file.getvalue().decode('utf-8')),
