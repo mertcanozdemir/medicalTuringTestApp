@@ -22,7 +22,7 @@ st.title("Görsel Turing Testi - Kardiyak Görüntüler")
 st.markdown("Bu uygulama, gerçek ve sentetik kardiyak görüntüleri ayırt etme yeteneğinizi değerlendirir.")
 
 # Google Drive kimlik doğrulama fonksiyonu
-def authenticate_gdrive():
+def authenticate_gdrive(key_suffix=""):
     """Google Drive API'sine bağlan ve servis objesi döndür"""
     # İki yöntem var: 
     # 1. Streamlit secrets ile
@@ -37,7 +37,9 @@ def authenticate_gdrive():
     # 2. Yüklenen kimlik dosyası ile
     else:
         st.warning("Google Drive kimlik bilgileri bulunamadı!")
-        uploaded_file = st.file_uploader("Service Account JSON dosyasını yükleyin:", type=['json'], key="service_account_uploader")
+        uploaded_file = st.file_uploader("Service Account JSON dosyasını yükleyin:", 
+                                        type=['json'], 
+                                        key=f"service_account_uploader_{key_suffix}")
         if uploaded_file is not None:
             credentials = Credentials.from_service_account_info(
                 eval(uploaded_file.getvalue().decode('utf-8')),
@@ -166,7 +168,7 @@ def initialize_app():
     """Uygulamayı başlat ve görüntüleri yükle"""
     # Google Drive servisini başlat
     if not st.session_state.drive_service:
-        st.session_state.drive_service = authenticate_gdrive()
+        st.session_state.drive_service = authenticate_gdrive(key_suffix="init")
         if not st.session_state.drive_service:
             st.error("Google Drive bağlantısı kurulamadı!")
             return
@@ -332,7 +334,7 @@ with st.sidebar:
     if not st.session_state.initialized:
         st.subheader("Google Drive Bağlantısı")
         if 'drive_service' not in st.session_state or st.session_state.drive_service is None:
-            st.session_state.drive_service = authenticate_gdrive()
+            st.session_state.drive_service = authenticate_gdrive(key_suffix="sidebar")
             if st.session_state.drive_service:
                 st.success("Google Drive bağlantısı kuruldu!")
             else:
