@@ -51,6 +51,8 @@ if 'initialized' not in st.session_state:
     st.session_state.results_folder_id = DEFAULT_RESULTS_FOLDER_ID
     # Geçici klasör
     st.session_state.temp_dir = tempfile.mkdtemp()
+    # Görüntüler yüklendi mi?
+    st.session_state.images_loaded = False
     # Kimlik bilgileri dosyası yüklenmiş mi?
     st.session_state.credentials_uploaded = False
     # Drive'a sonuçlar kaydedilsin mi?
@@ -368,63 +370,71 @@ def initialize_app():
             st.error("Lütfen servis hesabı kimlik bilgilerini (JSON) yükleyin!")
             return
         
-        with st.spinner("Google Drive bağlantısı kuruluyor..."):
-            drive_service = authenticate_google_drive(credentials_json)
-            
-            if not drive_service:
-                st.error("Google Drive kimlik doğrulaması başarısız!")
-                return
-            
-            # Klasörlerin varlığını kontrol et
-            real_files = list_files_in_folder(drive_service, st.session_state.real_folder_id)
-            synth_files = list_files_in_folder(drive_service, st.session_state.synth_folder_id)
-            
-            if not real_files:
-                st.error(f"Gerçek görüntüler klasörüne erişilemiyor veya klasör boş! (ID: {st.session_state.real_folder_id})")
-                return
-            
-            if not synth_files:
-                st.error(f"Sentetik görüntüler klasörüne erişilemiyor veya klasör boş! (ID: {st.session_state.synth_folder_id})")
-                return
-            
-            # Sonuçlar klasörünü kontrol et (eğer Drive'a kaydetme seçiliyse)
-            if st.session_state.save_to_drive:
-                results_files = list_files_in_folder(drive_service, st.session_state.results_folder_id)
-                if results_files is None:
-                    st.error(f"Sonuçlar klasörüne erişilemiyor! (ID: {st.session_state.results_folder_id})")
+        # Eğer görüntüler daha önce yüklenmediyse yükle
+        if not st.session_state.images_loaded:
+            with st.spinner("Google Drive bağlantısı kuruluyor..."):
+                drive_service = authenticate_google_drive(credentials_json)
+                
+                if not drive_service:
+                    st.error("Google Drive kimlik doğrulaması başarısız!")
                     return
+                
+                # Klasörlerin varlığını kontrol et
+                real_files = list_files_in_folder(drive_service, st.session_state.real_folder_id)
+                synth_files = list_files_in_folder(drive_service, st.session_state.synth_folder_id)
+                
+                if not real_files:
+                    st.error(f"Gerçek görüntüler klasörüne erişilemiyor veya klasör boş! (ID: {st.session_state.real_folder_id})")
+                    return
+                
+                if not synth_files:
+                    st.error(f"Sentetik görüntüler klasörüne erişilemiyor veya klasör boş! (ID: {st.session_state.synth_folder_id})")
+                    return
+                
+                # Sonuçlar klasörünü kontrol et (eğer Drive'a kaydetme seçiliyse)
+                if st.session_state.save_to_drive:
+                    results_files = list_files_in_folder(drive_service, st.session_state.results_folder_id)
+                    if results_files is None:
+                        st.error(f"Sonuçlar klasörüne erişilemiyor! (ID: {st.session_state.results_folder_id})")
+                        return
+                
+                # Başarılı ise drive_service'i kaydet
+                st.session_state.drive_service = drive_service
             
-            # Başarılı ise drive_service'i kaydet
-            st.session_state.drive_service = drive_service
-        
-        # Google Drive'dan görüntüleri yükle
-        with st.spinner("Görüntüler Google Drive'dan yükleniyor..."):
-            real_images = load_images_from_drive(
-                st.session_state.drive_service, 
-                st.session_state.real_folder_id, 
-                'gerçek', 
-                st.session_state.temp_dir
-            )
+            # Google Drive'dan görüntüleri yükle
+            with st.spinner("Görüntüler Google Drive'dan yükleniyor... (Bu işlem sadece bir kez yapılacak)"):
+                real_images = load_images_from_drive(
+                    st.session_state.drive_service, 
+                    st.session_state.real_folder_id, 
+                    'gerçek', 
+                    st.session_state.temp_dir
+                )
+                
+                synth_images = load_images_from_drive(
+                    st.session_state.drive_service, 
+                    st.session_state.synth_folder_id, 
+                    'sentetik', 
+                    st.session_state.temp_dir
+                )
             
-            synth_images = load_images_from_drive(
-                st.session_state.drive_service, 
-                st.session_state.synth_folder_id, 
-                'sentetik', 
-                st.session_state.temp_dir
-            )
-        
-        # Görüntü yükleme başarılı mı kontrol et
-        if not real_images or not synth_images:
-            st.error("Görüntüler yüklenemedi! Lütfen klasör ID'lerini kontrol edin.")
-            return
-        
-        # Görüntüleri birleştir ve karıştır
-        st.session_state.all_images = real_images + synth_images
-        
-        # Sistem zamanına dayalı gerçek rastgele tohum oluştur
-        import time
-        random.seed(time.time())
-        random.shuffle(st.session_state.all_images)
+            # Görüntü yükleme başarılı mı kontrol et
+            if not real_images or not synth_images:
+                st.error("Görüntüler yüklenemedi! Lütfen klasör ID'lerini kontrol edin.")
+                return
+            
+            # Görüntüleri birleştir ve karıştır
+            st.session_state.all_images = real_images + synth_images
+            
+            # Sistem zamanına dayalı gerçek rastgele tohum oluştur
+            import time
+            random.seed(time.time())
+            random.shuffle(st.session_state.all_images)
+            
+            # Görüntülerin yüklendiğini işaretle
+            st.session_state.images_loaded = True
+            st.success(f"Toplamda {len(st.session_state.all_images)} görüntü yüklendi!")
+        else:
+            st.success(f"Daha önce yüklenmiş {len(st.session_state.all_images)} görüntü kullanılacak.")
         
         st.session_state.initialized = True
         
@@ -435,7 +445,7 @@ def initialize_app():
         st.session_state.output_file = output_file
         st.session_state.result_file_name = result_file_name
         
-        st.success(f"Toplamda {len(st.session_state.all_images)} görüntü yüklendi! Değerlendirmeye başlayabilirsiniz.")
+        st.success("Değerlendirmeye başlayabilirsiniz.")
         st.rerun()
 
 def finish_evaluation():
