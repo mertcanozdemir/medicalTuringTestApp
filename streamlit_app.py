@@ -16,7 +16,6 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 import json
 import googleapiclient
-import gc  # Bellek yönetimi için garbage collector
 
 # Uygulama başlığı ve açıklaması
 st.set_page_config(page_title="Kardiyak Görüntü Değerlendirme Platformu", layout="wide")
@@ -46,7 +45,7 @@ APA_FEATURES = [
 
 # Oturum durumlarını kontrol et ve başlat
 if 'test_type' not in st.session_state:
-    st.session_state.test_type = "vtt"  # Varsayılan olarak Görsel Turing Testi seçili
+    st.session_state.test_type = None  # Seçilen test türü
     st.session_state.initialized = False
     st.session_state.current_idx = 0
     st.session_state.results = []
@@ -64,13 +63,6 @@ if 'test_type' not in st.session_state:
     st.session_state.drive_result_file_id = None
     # APA özellikleri için varsayılan puanlar
     st.session_state.ratings = {feature: 3 for feature in APA_FEATURES}
-    # Görüntü önbelleği
-    st.session_state.cached_images = {
-        'real': None,  # Gerçek görüntülerin önbelleği
-        'synth': None  # Sentetik görüntülerin önbelleği
-    }
-    # Önbellek durumu
-    st.session_state.cache_loaded = False
 
 ## ORTAK FONKSİYONLAR ##
 
@@ -222,19 +214,13 @@ def load_images_from_drive(drive_service, folder_id, img_type, temp_dir, max_ima
             if not file_path:
                 continue
             
-            # Görüntü yolunu kaydet (gerçek görüntüyü şimdi yükleme)
+            # Standart görüntü formatları için
+            img = Image.open(file_path)
             images.append({
                 'path': file_path,
                 'drive_id': file['id'],
                 'true_type': img_type
             })
-            
-            # Bellek kullanımını optimize etmek için her 10 görüntüde bir
-            # hafızayı temizlemeye çalış
-            if i % 10 == 0:
-                import gc
-                gc.collect()
-                
         except Exception as e:
             st.warning(f"Dosya işlenirken hata oluştu {file['name']}: {e}")
     
@@ -354,21 +340,13 @@ def initialize_app():
                 if st.session_state.test_type == "apa":
                     # Anatomik Olabilirlik Değerlendirmesi için sadece sentetik görüntüler
                     max_images = 100  # APA için daha fazla görüntü
-                    
-                    # Önbellekte sentetik görüntü var mı kontrol et
-                    if st.session_state.cached_images['synth'] is None:
-                        synth_images = load_images_from_drive(
-                            st.session_state.drive_service, 
-                            st.session_state.synth_folder_id, 
-                            'sentetik', 
-                            st.session_state.temp_dir,
-                            max_images
-                        )
-                        # Önbelleğe kaydet
-                        st.session_state.cached_images['synth'] = synth_images
-                    else:
-                        synth_images = st.session_state.cached_images['synth']
-                        st.success(f"{len(synth_images)} sentetik görüntü önbellekten yüklendi")
+                    synth_images = load_images_from_drive(
+                        st.session_state.drive_service, 
+                        st.session_state.synth_folder_id, 
+                        'sentetik', 
+                        st.session_state.temp_dir,
+                        max_images
+                    )
                     
                     # Görüntü yükleme başarılı mı kontrol et
                     if not synth_images:
@@ -381,36 +359,21 @@ def initialize_app():
                 elif st.session_state.test_type == "vtt":
                     # Görsel Turing Testi için gerçek ve sentetik görüntüler
                     max_images = 50  # VTT için daha az görüntü
+                    real_images = load_images_from_drive(
+                        st.session_state.drive_service, 
+                        st.session_state.real_folder_id, 
+                        'gerçek', 
+                        st.session_state.temp_dir,
+                        max_images
+                    )
                     
-                    # Önbellekte gerçek görüntü var mı kontrol et
-                    if st.session_state.cached_images['real'] is None:
-                        real_images = load_images_from_drive(
-                            st.session_state.drive_service, 
-                            st.session_state.real_folder_id, 
-                            'gerçek', 
-                            st.session_state.temp_dir,
-                            max_images
-                        )
-                        # Önbelleğe kaydet
-                        st.session_state.cached_images['real'] = real_images
-                    else:
-                        real_images = st.session_state.cached_images['real']
-                        st.success(f"{len(real_images)} gerçek görüntü önbellekten yüklendi")
-                    
-                    # Önbellekte sentetik görüntü var mı kontrol et
-                    if st.session_state.cached_images['synth'] is None:
-                        synth_images = load_images_from_drive(
-                            st.session_state.drive_service, 
-                            st.session_state.synth_folder_id, 
-                            'sentetik', 
-                            st.session_state.temp_dir,
-                            max_images
-                        )
-                        # Önbelleğe kaydet
-                        st.session_state.cached_images['synth'] = synth_images
-                    else:
-                        synth_images = st.session_state.cached_images['synth']
-                        st.success(f"{len(synth_images)} sentetik görüntü önbellekten yüklendi")
+                    synth_images = load_images_from_drive(
+                        st.session_state.drive_service, 
+                        st.session_state.synth_folder_id, 
+                        'sentetik', 
+                        st.session_state.temp_dir,
+                        max_images
+                    )
                     
                     # Görüntü yükleme başarılı mı kontrol et
                     if not real_images or not synth_images:
@@ -451,14 +414,15 @@ def display_apa_image():
         
         try:
             # Görüntü dosyasını yükle
-            with Image.open(img_data['path']) as img:
-                # Görüntüyü yeniden boyutlandır (256x256)
-                img = img.resize((256, 256), Image.LANCZOS)
-                
-                # Görüntüyü merkeze yerleştir
-                col1, col2, col3 = st.columns([1, 2, 1])
-                with col2:
-                    st.image(img, width=256)
+            img = Image.open(img_data['path'])
+            
+            # Görüntüyü yeniden boyutlandır
+            img = img.resize((250, 250), Image.LANCZOS)
+            
+            # Görüntüyü merkeze yerleştir
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                st.image(img, width=250)
             
             # Değerlendirme talimatı
             st.info("Lütfen aşağıdaki özellikleri 1-5 ölçeğinde değerlendirin (1: Çok Kötü, 5: Mükemmel)")
@@ -716,8 +680,6 @@ def finish_apa_evaluation():
             st.session_state.drive_result_file_id = None
             for feature in APA_FEATURES:
                 st.session_state.ratings[feature] = 3
-            # Önbellek verilerini korumak için cache_loaded'ı false yap
-            st.session_state.cache_loaded = False
             if hasattr(st.session_state, 'drive_graph_file_id'):
                 delattr(st.session_state, 'drive_graph_file_id')
             st.rerun()
@@ -911,14 +873,15 @@ def display_vtt_image():
         
         try:
             # Standart görüntü dosyasını yükle
-            with Image.open(img_data['path']) as img:
-                # Yeniden boyutlandır
-                img = img.resize((256, 256))
-                
-                # Görüntüyü merkeze yerleştir
-                col1, col2, col3 = st.columns([1, 2, 1])
-                with col2:
-                    st.image(img, width=256)
+            img = Image.open(img_data['path'])
+            
+            # Yeniden boyutlandır
+            img = img.resize((256, 256))
+            
+            # Görüntüyü merkeze yerleştir
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                st.image(img, width=256)
             
             # Kullanıcı talimatları
             st.info("Lütfen yukarıdaki görüntünün gerçek mi yoksa yapay zeka tarafından üretilmiş (sentetik) mi olduğunu değerlendirin.")
@@ -1170,8 +1133,8 @@ with st.sidebar:
         
         test_selection = st.radio(
             "Hangi testi yapmak istiyorsunuz?",
-            ["Görsel Turing Testi", "Anatomik Olabilirlik Değerlendirmesi"],
-            index=0,  # Varsayılan olarak Görsel Turing Testi seçili
+            ["Seçiniz...", "Anatomik Olabilirlik Değerlendirmesi", "Görsel Turing Testi"],
+            index=0,
             key="test_selection"
         )
         
@@ -1190,6 +1153,8 @@ with st.sidebar:
             
             Bu test, kardiyak görüntülerin gerçek mi yoksa yapay zeka tarafından üretilmiş mi olduğunu ayırt etme yeteneğinizi değerlendirir.
             """)
+        else:
+            st.session_state.test_type = None
         
         # Google Drive Bağlantı Durumu
         st.subheader("Google Drive Durumu")
@@ -1267,8 +1232,6 @@ with st.sidebar:
                     # APA puanlarını sıfırla
                     for feature in APA_FEATURES:
                         st.session_state.ratings[feature] = 3
-                    # Önbellek verilerini korumak için cache_loaded'ı false yap
-                    st.session_state.cache_loaded = False
                     st.rerun()
             else:
                 st.session_state.initialized = False
@@ -1282,8 +1245,6 @@ with st.sidebar:
                 # APA puanlarını sıfırla
                 for feature in APA_FEATURES:
                     st.session_state.ratings[feature] = 3
-                # Önbellek verilerini korumak için cache_loaded'ı false yap
-                st.session_state.cache_loaded = False
                 st.rerun()
     
     # Uygulama bilgileri
