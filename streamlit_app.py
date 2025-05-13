@@ -45,7 +45,7 @@ APA_FEATURES = [
 
 # Oturum durumlarını kontrol et ve başlat
 if 'test_type' not in st.session_state:
-    st.session_state.test_type = None  # Seçilen test türü
+    st.session_state.test_type = "vtt"  # Varsayılan olarak Görsel Turing Testi seç
     st.session_state.initialized = False
     st.session_state.current_idx = 0
     st.session_state.results = []
@@ -417,12 +417,12 @@ def display_apa_image():
             img = Image.open(img_data['path'])
             
             # Görüntüyü yeniden boyutlandır
-            img = img.resize((250, 250), Image.LANCZOS)
+            img = img.resize((500, 350), Image.LANCZOS)
             
             # Görüntüyü merkeze yerleştir
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
-                st.image(img, width=250)
+                st.image(img, width=500)
             
             # Değerlendirme talimatı
             st.info("Lütfen aşağıdaki özellikleri 1-5 ölçeğinde değerlendirin (1: Çok Kötü, 5: Mükemmel)")
@@ -1134,7 +1134,7 @@ with st.sidebar:
         test_selection = st.radio(
             "Hangi testi yapmak istiyorsunuz?",
             ["Seçiniz...", "Anatomik Olabilirlik Değerlendirmesi", "Görsel Turing Testi"],
-            index=0,
+            index=2,  # Görsel Turing Testi'ni varsayılan olarak seç
             key="test_selection"
         )
         
