@@ -6,7 +6,6 @@ import streamlit as st
 from PIL import Image
 import random
 from sklearn.metrics import cohen_kappa_score
-import pydicom
 import io
 import base64
 import tempfile
@@ -96,7 +95,7 @@ def load_images_from_drive(drive_service, folder_id, img_type):
         files = list_files_in_folder(drive_service, folder_id)
         for file in files:
             file_name = file.get('name', '')
-            if file_name.lower().endswith(('.dcm', '.png', '.jpg', '.jpeg')):
+            if file_name.lower().endswith(('.png', '.jpg', '.jpeg')):
                 image_files.append({
                     'id': file.get('id'),
                     'name': file_name
@@ -127,34 +126,19 @@ def load_images_from_drive(drive_service, folder_id, img_type):
                 # Dosyayı geçici olarak indir
                 temp_file_path = download_file(drive_service, file_id, file_name)
                 
-                if file_name.lower().endswith('.dcm'):
-                    # DICOM dosyaları için
-                    try:
-                        ds = pydicom.dcmread(temp_file_path)
-                        pixel_array = ds.pixel_array
-                        images.append({
-                            'path': temp_file_path,
-                            'drive_id': file_id,
-                            'name': file_name,
-                            'true_type': img_type,
-                            'pixel_data': pixel_array
-                        })
-                    except Exception as e:
-                        st.warning(f"DICOM dosyası yüklenirken hata oluştu {file_name}: {e}")
-                elif file_name.lower().endswith(('.png', '.jpg', '.jpeg')):
-                    # Standart görüntü formatları için
-                    try:
-                        # Sadece görüntünün açılabildiğini doğrulamak için
-                        img = Image.open(temp_file_path)
-                        img.verify()
-                        images.append({
-                            'path': temp_file_path,
-                            'drive_id': file_id,
-                            'name': file_name,
-                            'true_type': img_type
-                        })
-                    except Exception as e:
-                        st.warning(f"Görüntü dosyası yüklenirken hata oluştu {file_name}: {e}")
+                # Standart görüntü formatları için
+                try:
+                    # Sadece görüntünün açılabildiğini doğrulamak için
+                    img = Image.open(temp_file_path)
+                    img.verify()
+                    images.append({
+                        'path': temp_file_path,
+                        'drive_id': file_id,
+                        'name': file_name,
+                        'true_type': img_type
+                    })
+                except Exception as e:
+                    st.warning(f"Görüntü dosyası yüklenirken hata oluştu {file_name}: {e}")
             except Exception as e:
                 st.warning(f"Dosya indirirken hata oluştu {file_name}: {e}")
     
@@ -218,27 +202,8 @@ def display_current_image():
         img_data = st.session_state.all_images[st.session_state.current_idx]
         
         try:
-            if 'pixel_data' in img_data:
-                # DICOM görüntüsünü standart pencere ayarlarıyla göster
-                pixel_array = img_data['pixel_data']
-                
-                # Standart pencere ayarlarını uygula
-                window_center = 500
-                window_width = 1500
-                
-                # Pencerelemeyi uygula
-                lower_bound = window_center - window_width // 2
-                upper_bound = window_center + window_width // 2
-                windowed_image = np.clip(pixel_array, lower_bound, upper_bound)
-                
-                # Görüntülemek için 0-255 aralığına normalize et
-                windowed_image = ((windowed_image - lower_bound) / (upper_bound - lower_bound) * 255).astype(np.uint8)
-                
-                # PIL Image'a dönüştür
-                img = Image.fromarray(windowed_image)
-            else:
-                # Standart görüntü dosyasını yükle
-                img = Image.open(img_data['path'])
+            # Standart görüntü dosyasını yükle
+            img = Image.open(img_data['path'])
             
             # Yeniden boyutlandır
             img = img.resize((256, 256))
