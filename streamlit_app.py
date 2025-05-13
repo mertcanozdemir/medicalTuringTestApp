@@ -417,7 +417,7 @@ def display_apa_image():
             img = Image.open(img_data['path'])
             
             # Görüntüyü yeniden boyutlandır
-            img = img.resize((500, 350), Image.LANCZOS)
+            img = img.resize((256, 256), Image.LANCZOS)
             
             # Görüntüyü merkeze yerleştir
             col1, col2, col3 = st.columns([1, 2, 1])
