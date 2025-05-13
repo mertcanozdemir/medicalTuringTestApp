@@ -6,6 +6,7 @@ import streamlit as st
 from PIL import Image
 import random
 from sklearn.metrics import cohen_kappa_score
+import seaborn as sns
 import io
 import base64
 from datetime import datetime
@@ -17,50 +18,54 @@ import json
 import googleapiclient
 
 # Uygulama başlığı ve açıklaması
-st.set_page_config(page_title="Görsel Turing Testi", layout="wide")
-st.title("Görsel Turing Testi - Kardiyak Görüntüler")
-st.markdown("Bu uygulama, gerçek ve sentetik kardiyak görüntüleri ayırt etme yeteneğinizi değerlendirir.")
+st.set_page_config(page_title="Kardiyak Görüntü Değerlendirme Platformu", layout="wide")
+st.title("Kardiyak Görüntü Değerlendirme Platformu")
+st.markdown("Bu platform, kardiyak görüntülerin değerlendirilmesi için iki farklı test sunar.")
 
 # Varsayılan dizin yolu (sadece sonuçlar için)
 DEFAULT_OUTPUT_DIR = r".\results"  # Yerel dizin yolu
+os.makedirs(DEFAULT_OUTPUT_DIR, exist_ok=True)
 
 # Google Drive entegrasyonu için değişkenler
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly', 'https://www.googleapis.com/auth/drive.file']
 
 # Google Drive klasör ID'leri
-DEFAULT_REAL_FOLDER_ID = "1XJgpXqdVSfOIriECXwXuwccs3N0KiqQ_"  # Gerçek klasör ID'si ile değiştirin
-DEFAULT_SYNTHETIC_FOLDER_ID = "1iGykeA2-cG68wj-4xZDXLp6CH4DcisLo"  # Sentetik klasör ID'si ile değiştirin
-DEFAULT_RESULTS_FOLDER_ID = "1Zjh8EDGnUAJGor4sVxIyMllw1zswlWQA"  # Sonuçlar klasör ID'si ile değiştirin
+DEFAULT_REAL_FOLDER_ID = "1XJgpXqdVSfOIriECXwXuwccs3N0KiqQ_"  # Gerçek klasör ID'si
+DEFAULT_SYNTHETIC_FOLDER_ID = "1iGykeA2-cG68wj-4xZDXLp6CH4DcisLo"  # Sentetik klasör ID'si
+DEFAULT_RESULTS_FOLDER_ID = "1Zjh8EDGnUAJGor4sVxIyMllw1zswlWQA"  # Sonuçlar klasör ID'si
+
+# Anatomik Olabilirlik Değerlendirmesi özellikleri
+APA_FEATURES = [
+    "Genel Anatomik Olabilirlik",
+    "Ventrikül Morfolojisi",
+    "Miyokard Kalınlığı",
+    "Papiller Kas Tanımı",
+    "Kan Havuzu Kontrastı"
+]
 
 # Oturum durumlarını kontrol et ve başlat
-if 'initialized' not in st.session_state:
+if 'test_type' not in st.session_state:
+    st.session_state.test_type = None  # Seçilen test türü
     st.session_state.initialized = False
     st.session_state.current_idx = 0
     st.session_state.results = []
     st.session_state.all_images = []
     st.session_state.completed = False
     st.session_state.radiologist_id = ""
-    # Sadece sonuç dizinini başlat
     st.session_state.output_dir = DEFAULT_OUTPUT_DIR
-    # Çıktı dizinini oluştur (yoksa)
-    os.makedirs(DEFAULT_OUTPUT_DIR, exist_ok=True)
-    # Google Drive ile ilgili durumlar
     st.session_state.drive_service = None
     st.session_state.real_folder_id = DEFAULT_REAL_FOLDER_ID
     st.session_state.synth_folder_id = DEFAULT_SYNTHETIC_FOLDER_ID
     st.session_state.results_folder_id = DEFAULT_RESULTS_FOLDER_ID
-    # Geçici klasör
     st.session_state.temp_dir = tempfile.mkdtemp()
-    # Görüntüler yüklendi mi?
-    st.session_state.images_loaded = False
-    # Kimlik bilgileri dosyası yüklenmiş mi?
     st.session_state.credentials_uploaded = False
-    # Drive'a sonuçlar kaydedilsin mi?
     st.session_state.save_to_drive = True
-    # Drive'daki sonuç dosyasının ID'si
     st.session_state.drive_result_file_id = None
+    # APA özellikleri için varsayılan puanlar
+    st.session_state.ratings = {feature: 3 for feature in APA_FEATURES}
 
-# Ana fonksiyonlar
+## ORTAK FONKSİYONLAR ##
+
 def upload_file_to_drive(drive_service, file_path, folder_id, file_name=None):
     """Google Drive'a dosya yükle"""
     try:
@@ -116,6 +121,7 @@ def update_file_in_drive(drive_service, file_path, file_id, file_name=None):
         return None
 
 def authenticate_google_drive(credentials_json):
+    """Google Drive kimlik doğrulama"""
     try:
         # Eğer zaten bir dictionary ise
         if isinstance(credentials_json, dict):
@@ -166,7 +172,7 @@ def download_file_from_drive(drive_service, file_id, file_name, destination_fold
         st.error(f"Dosya indirme hatası (ID: {file_id}): {e}")
         return None
 
-def load_images_from_drive(drive_service, folder_id, img_type, temp_dir):
+def load_images_from_drive(drive_service, folder_id, img_type, temp_dir, max_images=50):
     """Google Drive klasöründen görüntüleri yükle"""
     images = []
     
@@ -177,19 +183,18 @@ def load_images_from_drive(drive_service, folder_id, img_type, temp_dir):
         st.warning(f"Google Drive klasöründe ({folder_id}) görüntü bulunamadı!")
         return []
     
-    # Sadece resim dosyalarını filtrele (DICOM desteği çıkartıldı)
+    # Sadece desteklenen görüntü formatlarını filtrele
     image_files = [f for f in files if f['mimeType'].startswith('image/') or
-                   f['name'].lower().endswith(('.png', '.jpg', '.jpeg'))]
+                  f['name'].lower().endswith(('.png', '.jpg', '.jpeg'))]
     
     if not image_files:
         st.warning(f"Google Drive klasöründe desteklenen görüntü formatı bulunamadı!")
         return []
     
-    # 50'den fazla görüntü varsa, rastgele 50 tane seç
-    if len(image_files) > 50:
-        import time
-        random.seed(time.time())
-        image_files = random.sample(image_files, 50)
+    # Görüntü sayısını sınırla
+    if len(image_files) > max_images:
+        random.seed(datetime.now().timestamp())
+        image_files = random.sample(image_files, max_images)
     
     # İndirilecek görüntü sayısı
     total_images = len(image_files)
@@ -208,7 +213,7 @@ def load_images_from_drive(drive_service, folder_id, img_type, temp_dir):
             
             if not file_path:
                 continue
-                
+            
             # Standart görüntü formatları için
             img = Image.open(file_path)
             images.append({
@@ -225,8 +230,639 @@ def load_images_from_drive(drive_service, folder_id, img_type, temp_dir):
     st.success(f"{len(images)} {img_type} görüntü Google Drive'dan yüklendi")
     return images
 
-def display_current_image():
-    """Mevcut görüntüyü göster"""
+def initialize_app():
+    """Uygulamayı başlat - ortak giriş formu"""
+    st.header("Değerlendirmeyi Başlat")
+    
+    # Radyolog bilgileri
+    col1, col2 = st.columns(2)
+    with col1:
+        st.session_state.radiologist_id = st.text_input("Radyolog Kimliği:", value="", key="rad_id_input")
+    with col2:
+        tarih = datetime.now().strftime("%Y-%m-%d")
+        st.text_input("Tarih:", value=tarih, disabled=True)
+    
+    # Kimlik bilgilerini otomatik yükle
+    if hasattr(st, 'secrets') and 'google_service_account' in st.secrets:
+        st.success("☁️ Streamlit Cloud'da çalışıyor. Google Drive kimlik bilgileri secrets'dan yüklendi.")
+        credentials_json = dict(st.secrets["google_service_account"])
+        st.session_state.credentials_uploaded = True
+    else:
+        # Servis hesabı kimlik bilgileri
+        uploaded_file = st.file_uploader(
+            "Servis Hesabı Kimlik Bilgileri (JSON dosyası):",
+            type=["json"],
+            help="Google Cloud Console'dan indirdiğiniz servis hesabı anahtarı JSON dosyasını yükleyin."
+        )
+        
+        if uploaded_file is not None:
+            try:
+                # JSON dosyasını oku
+                credentials_json = uploaded_file.getvalue().decode('utf-8')
+                st.session_state.credentials_uploaded = True
+            except Exception as e:
+                st.error(f"Dosya okuma hatası: {e}")
+                st.session_state.credentials_uploaded = False
+    
+    # Yardım metni
+    if st.session_state.test_type == "apa":
+        st.info("""
+        **Anatomik Olabilirlik Değerlendirmesi - Nasıl Kullanılır?**
+        1. Radyolog kimliğinizi girin
+        2. Google Cloud'dan indirdiğiniz servis hesabı JSON dosyasını yükleyin
+        3. "Değerlendirmeyi Başlat" butonuna tıklayın
+        4. Her görüntüyü dikkatle inceleyin ve istenen anatomik özellikleri 1-5 ölçeğinde değerlendirin
+        5. Değerlendirme sonuçlarınız otomatik olarak kaydedilecektir
+        """)
+    elif st.session_state.test_type == "vtt":
+        st.info("""
+        **Görsel Turing Testi - Nasıl Kullanılır?**
+        1. Radyolog kimliğinizi girin
+        2. Google Cloud'dan indirdiğiniz servis hesabı JSON dosyasını yükleyin
+        3. "Değerlendirmeyi Başlat" butonuna tıklayın
+        4. Her görüntüyü dikkatle inceleyin ve gerçek mi yoksa sentetik mi olduğunu belirtin
+        5. Değerlendirme sonuçlarınız otomatik olarak kaydedilecektir
+        """)
+    else:
+        st.info("""
+        **Nasıl Kullanılır?**
+        1. Yan menüden test türünü seçin (Anatomik Olabilirlik Değerlendirmesi veya Görsel Turing Testi)
+        2. Radyolog kimliğinizi girin
+        3. Google Cloud'dan indirdiğiniz servis hesabı JSON dosyasını yükleyin
+        4. "Değerlendirmeyi Başlat" butonuna tıklayın
+        """)
+    
+    # Başlatma butonu - Test türü seçilmişse aktifleştir
+    if st.session_state.test_type:
+        if st.button("Değerlendirmeyi Başlat", key="start_button", use_container_width=True):
+            if not st.session_state.radiologist_id:
+                st.error("Lütfen Radyolog Kimliğinizi girin!")
+                return
+
+            if not st.session_state.credentials_uploaded:
+                st.error("Lütfen servis hesabı kimlik bilgilerini (JSON) yükleyin!")
+                return
+            
+            with st.spinner("Google Drive bağlantısı kuruluyor..."):
+                drive_service = authenticate_google_drive(credentials_json)
+                
+                if not drive_service:
+                    st.error("Google Drive kimlik doğrulaması başarısız!")
+                    return
+                
+                # Klasörlerin varlığını kontrol et
+                if st.session_state.test_type == "vtt":
+                    # VTT için gerçek ve sentetik görüntüler gerekli
+                    real_files = list_files_in_folder(drive_service, st.session_state.real_folder_id)
+                    if not real_files:
+                        st.error(f"Gerçek görüntüler klasörüne erişilemiyor veya klasör boş! (ID: {st.session_state.real_folder_id})")
+                        return
+                
+                # Her iki test için de sentetik görüntüler gerekli
+                synth_files = list_files_in_folder(drive_service, st.session_state.synth_folder_id)
+                if not synth_files:
+                    st.error(f"Sentetik görüntüler klasörüne erişilemiyor veya klasör boş! (ID: {st.session_state.synth_folder_id})")
+                    return
+                
+                # Sonuçlar klasörünü kontrol et (eğer Drive'a kaydetme seçiliyse)
+                if st.session_state.save_to_drive:
+                    results_files = list_files_in_folder(drive_service, st.session_state.results_folder_id)
+                    if results_files is None:
+                        st.error(f"Sonuçlar klasörüne erişilemiyor! (ID: {st.session_state.results_folder_id})")
+                        return
+                
+                # Başarılı ise drive_service'i kaydet
+                st.session_state.drive_service = drive_service
+            
+            # Google Drive'dan görüntüleri yükle
+            with st.spinner("Görüntüler Google Drive'dan yükleniyor..."):
+                # Test türüne göre görüntüleri yükle
+                if st.session_state.test_type == "apa":
+                    # Anatomik Olabilirlik Değerlendirmesi için sadece sentetik görüntüler
+                    max_images = 100  # APA için daha fazla görüntü
+                    synth_images = load_images_from_drive(
+                        st.session_state.drive_service, 
+                        st.session_state.synth_folder_id, 
+                        'sentetik', 
+                        st.session_state.temp_dir,
+                        max_images
+                    )
+                    
+                    # Görüntü yükleme başarılı mı kontrol et
+                    if not synth_images:
+                        st.error("Görüntüler yüklenemedi! Lütfen klasör ID'lerini kontrol edin.")
+                        return
+                    
+                    # Tüm görüntüleri ayarla
+                    st.session_state.all_images = synth_images
+                
+                elif st.session_state.test_type == "vtt":
+                    # Görsel Turing Testi için gerçek ve sentetik görüntüler
+                    max_images = 50  # VTT için daha az görüntü
+                    real_images = load_images_from_drive(
+                        st.session_state.drive_service, 
+                        st.session_state.real_folder_id, 
+                        'gerçek', 
+                        st.session_state.temp_dir,
+                        max_images
+                    )
+                    
+                    synth_images = load_images_from_drive(
+                        st.session_state.drive_service, 
+                        st.session_state.synth_folder_id, 
+                        'sentetik', 
+                        st.session_state.temp_dir,
+                        max_images
+                    )
+                    
+                    # Görüntü yükleme başarılı mı kontrol et
+                    if not real_images or not synth_images:
+                        st.error("Görüntüler yüklenemedi! Lütfen klasör ID'lerini kontrol edin.")
+                        return
+                    
+                    # Görüntüleri birleştir ve karıştır
+                    st.session_state.all_images = real_images + synth_images
+            
+            # Görüntüleri karıştır
+            random.seed(datetime.now().timestamp())
+            random.shuffle(st.session_state.all_images)
+            
+            st.session_state.initialized = True
+            
+            # Sonuç dosyasının adını oluştur
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            test_prefix = "apa" if st.session_state.test_type == "apa" else "vtt"
+            result_file_name = f"{test_prefix}_sonuclari_{st.session_state.radiologist_id}_{timestamp}.csv"
+            output_file = os.path.join(st.session_state.output_dir, result_file_name)
+            st.session_state.output_file = output_file
+            st.session_state.result_file_name = result_file_name
+            
+            st.success(f"Toplamda {len(st.session_state.all_images)} görüntü yüklendi! Değerlendirmeye başlayabilirsiniz.")
+            st.rerun()
+
+## ANATOMİK OLABİLİRLİK DEĞERLENDİRMESİ (APA) FONKSİYONLARI ##
+
+def display_apa_image():
+    """Anatomik Olabilirlik Değerlendirmesi için görüntü göster"""
+    if st.session_state.current_idx < len(st.session_state.all_images):
+        # İlerleme bilgisi
+        progress = int((st.session_state.current_idx / len(st.session_state.all_images)) * 100)
+        st.progress(progress)
+        st.subheader(f"Görüntü {st.session_state.current_idx + 1} / {len(st.session_state.all_images)}")
+        
+        img_data = st.session_state.all_images[st.session_state.current_idx]
+        
+        try:
+            # Görüntü dosyasını yükle
+            img = Image.open(img_data['path'])
+            
+            # Görüntüyü yeniden boyutlandır
+            img = img.resize((500, 350), Image.LANCZOS)
+            
+            # Görüntüyü merkeze yerleştir
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                st.image(img, width=500)
+            
+            # Değerlendirme talimatı
+            st.info("Lütfen aşağıdaki özellikleri 1-5 ölçeğinde değerlendirin (1: Çok Kötü, 5: Mükemmel)")
+            
+            # Değerlendirme kaydırıcıları
+            with st.container():
+                # Her özellik için kaydırıcı
+                for feature in APA_FEATURES:
+                    st.session_state.ratings[feature] = st.slider(
+                        f"{feature}", 
+                        min_value=1, 
+                        max_value=5, 
+                        value=st.session_state.ratings.get(feature, 3),
+                        key=f"slider_{feature}_{st.session_state.current_idx}"
+                    )
+            
+            # Gönder butonu
+            if st.button("Değerlendirmeyi Gönder ve İlerle", use_container_width=True):
+                record_apa_assessment()
+            
+        except Exception as e:
+            st.error(f"Görüntü gösterilemiyor: {e}")
+            st.session_state.current_idx += 1
+            st.rerun()
+    else:
+        finish_apa_evaluation()
+
+def record_apa_assessment():
+    """Anatomik Olabilirlik Değerlendirmesini kaydet"""
+    if st.session_state.current_idx < len(st.session_state.all_images):
+        # Sonucu kaydet
+        img_data = st.session_state.all_images[st.session_state.current_idx]
+        
+        result = {
+            'radiologist_id': st.session_state.radiologist_id,
+            'image_path': img_data['path'],
+            'image_id': img_data.get('drive_id', ''),
+            'image_number': st.session_state.current_idx + 1,
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        # Her özellik için puanları kaydet
+        for feature in APA_FEATURES:
+            result[feature.replace(" ", "_").lower()] = st.session_state.ratings[feature]
+        
+        st.session_state.results.append(result)
+        
+        # Her değerlendirmeden sonra mevcut sonuçları yerel dosyaya kaydet
+        try:
+            df = pd.DataFrame(st.session_state.results)
+            df.to_csv(st.session_state.output_file, index=False)
+            
+            # Eğer Drive'a kaydetme seçiliyse ve klasör ID'si varsa
+            if st.session_state.save_to_drive and st.session_state.results_folder_id:
+                if st.session_state.drive_result_file_id:
+                    # Drive'daki dosyayı güncelle
+                    update_file_in_drive(
+                        st.session_state.drive_service, 
+                        st.session_state.output_file, 
+                        st.session_state.drive_result_file_id,
+                        st.session_state.result_file_name
+                    )
+                else:
+                    # İlk kez Drive'a yükle
+                    file_id = upload_file_to_drive(
+                        st.session_state.drive_service, 
+                        st.session_state.output_file, 
+                        st.session_state.results_folder_id,
+                        st.session_state.result_file_name
+                    )
+                    if file_id:
+                        st.session_state.drive_result_file_id = file_id
+        except Exception as e:
+            st.warning(f"Sonuçlar kaydedilirken hata oluştu: {e}")
+        
+        # Sonraki görüntü için kaydırıcıları sıfırla
+        for feature in APA_FEATURES:
+            st.session_state.ratings[feature] = 3
+        
+        # Sonraki görüntüye geç
+        st.session_state.current_idx += 1
+        
+        # Sayfayı yeniden yükle
+        st.rerun()
+
+def finish_apa_evaluation():
+    """Anatomik Olabilirlik Değerlendirmesini bitir ve sonuçları göster"""
+    if not st.session_state.completed:
+        # Özet istatistikleri göster
+        df = pd.DataFrame(st.session_state.results)
+        
+        # Her özellik için ortalama puanları hesapla
+        mean_scores = {feature: np.mean(df[feature.replace(" ", "_").lower()]) 
+                      for feature in APA_FEATURES}
+        
+        # Görselleştirme oluştur
+        try:
+            # Grafikler için bir figür oluştur
+            fig, ax = plt.subplots(figsize=(12, 8))
+            
+            # Çubuk grafik için verileri hazırla
+            feature_names = [f for f in APA_FEATURES]
+            values = [mean_scores[f] for f in APA_FEATURES]
+            
+            # Ortalama puanları çubuk grafik olarak göster
+            bars = ax.bar(feature_names, values, color='#2986cc')
+            
+            # Çubukların üzerine değerleri ekle
+            for bar, val in zip(bars, values):
+                ax.text(bar.get_x() + bar.get_width()/2, 
+                        val + 0.1, 
+                        f'{val:.2f}', 
+                        ha='center', 
+                        va='bottom',
+                        fontweight='bold')
+            
+            ax.set_ylim([0, 5.5])
+            ax.set_ylabel('Ortalama Puan', fontsize=12)
+            ax.set_title('Anatomik Olabilirlik Puanları', fontsize=16)
+            plt.xticks(rotation=45, ha='right')
+            
+            # Grafiği kaydet
+            graph_file_name = f"apa_grafikler_{st.session_state.radiologist_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            graph_file_path = os.path.join(st.session_state.output_dir, graph_file_name)
+            plt.tight_layout()
+            plt.savefig(graph_file_path)
+            
+            # Grafiği Drive'a yükle
+            if st.session_state.save_to_drive and st.session_state.results_folder_id:
+                graph_id = upload_file_to_drive(
+                    st.session_state.drive_service,
+                    graph_file_path,
+                    st.session_state.results_folder_id,
+                    graph_file_name
+                )
+                if graph_id:
+                    st.session_state.drive_graph_file_id = graph_id
+        except Exception as e:
+            st.warning(f"Grafik dosyası oluşturulurken hata oluştu: {e}")
+        
+        st.balloons()  # Kutlama animasyonu
+        st.success("🎉 Değerlendirme tamamlandı! Teşekkür ederiz.")
+        
+        # Sonuçları sekmeli arayüzde göster
+        tab1, tab2, tab3 = st.tabs(["Özet", "Grafikler", "Detaylı Veriler"])
+        
+        with tab1:
+            st.subheader("Değerlendirme Özeti")
+            
+            # Metrikler için sütunlar
+            cols = st.columns(len(APA_FEATURES))
+            for i, feature in enumerate(APA_FEATURES):
+                with cols[i]:
+                    st.metric(
+                        label=feature, 
+                        value=f"{mean_scores[feature]:.2f}"
+                    )
+            
+            # Sonuçların kaydedildiği yerler
+            st.subheader("Sonuç Dosyaları")
+            st.write(f"**Yerel sonuç dosyası**: {st.session_state.output_file}")
+            
+            if st.session_state.save_to_drive and st.session_state.drive_result_file_id:
+                st.write(f"**Google Drive sonuç dosyası ID**: {st.session_state.drive_result_file_id}")
+                drive_file_link = f"https://drive.google.com/file/d/{st.session_state.drive_result_file_id}/view"
+                st.markdown(f"[Google Drive'da Sonuç Dosyasını Aç]({drive_file_link})")
+            
+            if hasattr(st.session_state, 'drive_graph_file_id') and st.session_state.drive_graph_file_id:
+                st.write(f"**Google Drive grafik dosyası ID**: {st.session_state.drive_graph_file_id}")
+                graph_file_link = f"https://drive.google.com/file/d/{st.session_state.drive_graph_file_id}/view"
+                st.markdown(f"[Google Drive'da Grafik Dosyasını Aç]({graph_file_link})")
+
+        with tab2:
+            st.subheader("Puanlama Grafikleri")
+            
+            # Ortalama puanlar grafiğini göster
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.bar(feature_names, values, color='#2986cc')
+            ax.set_ylim([0, 5])
+            ax.set_ylabel('Ortalama Puan')
+            ax.set_title('Anatomik Olabilirlik Ortalama Puanları')
+            plt.xticks(rotation=45, ha='right')
+            
+            st.pyplot(fig)
+            
+            # Puan dağılımı ısı haritası
+            st.subheader("Puan Dağılımı")
+            
+            # Isı haritası için verileri hazırla
+            heatmap_data = []
+            for feature in APA_FEATURES:
+                feature_key = feature.replace(" ", "_").lower()
+                if feature_key in df.columns:
+                    scores = df[feature_key].value_counts().reindex(range(1, 6), fill_value=0)
+                    heatmap_data.append(scores.values)
+            
+            if heatmap_data:
+                fig2, ax2 = plt.subplots(figsize=(10, 8))
+                
+                # Yüzdelere dönüştür
+                heatmap_array = np.array(heatmap_data)
+                data_percent = (heatmap_array / heatmap_array.sum(axis=1)[:, np.newaxis]) * 100
+                
+                sns.heatmap(data_percent, annot=True, fmt='.1f', cmap='YlGnBu', 
+                          xticklabels=['1', '2', '3', '4', '5'],
+                          yticklabels=feature_names, ax=ax2)
+                
+                ax2.set_title('Puan Dağılımı (% olarak)')
+                ax2.set_xlabel('5 Basamaklı Likert Ölçeğinde Puan')
+                
+                st.pyplot(fig2)
+        
+        with tab3:
+            st.subheader("Değerlendirme Detayları")
+            
+            # Veri çerçevesini göster
+            show_df = df.copy()
+            show_df['image_path'] = show_df['image_path'].apply(lambda x: os.path.basename(x))  # Sadece dosya adını göster
+            
+            # Sütun isimlerini daha anlaşılır hale getir
+            column_mapping = {
+                'radiologist_id': 'Radyolog',
+                'image_path': 'Görüntü',
+                'image_id': 'Görüntü ID',
+                'image_number': 'Görüntü No',
+                'timestamp': 'Zaman'
+            }
+            
+            # Özellik sütunlarını eşleştir
+            for feature in APA_FEATURES:
+                feature_key = feature.replace(" ", "_").lower()
+                column_mapping[feature_key] = feature
+            
+            # Sütun isimlerini değiştir
+            show_df = show_df.rename(columns=column_mapping)
+            
+            st.dataframe(show_df, use_container_width=True)
+        
+        # Sonuçları CSV olarak indir
+        st.download_button(
+            label="Sonuçları CSV Olarak İndir",
+            data=df.to_csv(index=False).encode('utf-8'),
+            file_name=st.session_state.result_file_name,
+            mime="text/csv",
+        )
+        
+        # Yeni değerlendirme başlat butonu
+        if st.button("Yeni Değerlendirme Başlat", key="new_eval"):
+            st.session_state.initialized = False
+            st.session_state.current_idx = 0
+            st.session_state.results = []
+            st.session_state.all_images = []
+            st.session_state.completed = False
+            st.session_state.radiologist_id = ""
+            st.session_state.drive_result_file_id = None
+            for feature in APA_FEATURES:
+                st.session_state.ratings[feature] = 3
+            if hasattr(st.session_state, 'drive_graph_file_id'):
+                delattr(st.session_state, 'drive_graph_file_id')
+            st.rerun()
+        
+        st.session_state.completed = True
+
+def analyze_apa_results(radiologist1_file, radiologist2_file):
+    """İki radyolog arasındaki Anatomik Olabilirlik Değerlendirmelerini analiz et"""
+    st.header("İki Radyolog Arasındaki Değerlendirme Analizi")
+    
+    try:
+        # Sonuçları yükle
+        df1 = pd.read_csv(radiologist1_file)
+        df2 = pd.read_csv(radiologist2_file)
+        
+        # Görüntü yoluna göre sonuçları birleştir
+        merged = pd.merge(df1, df2, on='image_path', suffixes=('_rad1', '_rad2'))
+        
+        # Analiz için özellik sütunları
+        feature_cols = [feature.replace(" ", "_").lower() for feature in APA_FEATURES]
+        
+        # Her özellik için Cohen's kappa hesapla
+        kappa_scores = {}
+        for feature in feature_cols:
+            # Puanları tamsayıya dönüştür
+            rad1_scores = merged[f"{feature}_rad1"].astype(int)
+            rad2_scores = merged[f"{feature}_rad2"].astype(int)
+            
+            # Ağırlıklı kappa hesapla (Likert ölçekleri için daha uygun)
+            kappa = cohen_kappa_score(rad1_scores, rad2_scores, weights='linear')
+            kappa_scores[feature] = kappa
+        
+        # Her özellik ve radyolog için ortalama puanları hesapla
+        mean_scores_rad1 = {feature: np.mean(merged[f"{feature}_rad1"]) for feature in feature_cols}
+        mean_scores_rad2 = {feature: np.mean(merged[f"{feature}_rad2"]) for feature in feature_cols}
+        
+        # Görselleştirme oluştur
+        tab1, tab2, tab3 = st.tabs(["Cohen's Kappa", "Ortalama Puanlar", "Detaylı Veriler"])
+        
+        with tab1:
+            st.subheader("Değerlendiriciler Arası Uyum (Cohen's Kappa)")
+            
+            # Kappa puanları için çubuk grafik
+            fig, ax = plt.subplots(figsize=(10, 6))
+            feature_names = [f.replace("_", " ").title() for f in feature_cols]
+            kappa_values = [kappa_scores[f] for f in feature_cols]
+            
+            # Kappa değerine göre renklendirme
+            colors = ['#ff9999' if k < 0.4 else '#ffcc99' if k < 0.6 else '#99cc99' if k < 0.8 else '#99ccff' for k in kappa_values]
+            
+            bars = ax.bar(feature_names, kappa_values, color=colors)
+            
+            # Değerleri ekle
+            for bar, val in zip(bars, kappa_values):
+                ax.text(bar.get_x() + bar.get_width()/2, 
+                        val + 0.02, 
+                        f'{val:.2f}', 
+                        ha='center', 
+                        va='bottom',
+                        fontweight='bold')
+            
+            ax.set_ylim([0, 1])
+            ax.set_ylabel('Cohen\'s Kappa')
+            ax.set_title('Değerlendiriciler Arası Uyum')
+            plt.xticks(rotation=45, ha='right')
+            
+            # Kappa yorumlama çizgileri
+            ax.axhline(y=0.4, linestyle='--', color='r', alpha=0.3)
+            ax.axhline(y=0.6, linestyle='--', color='y', alpha=0.3)
+            ax.axhline(y=0.8, linestyle='--', color='g', alpha=0.3)
+            
+            st.pyplot(fig)
+            
+            # Kappa yorumlama rehberi
+            st.info("""
+            **Cohen's Kappa Yorumlama Rehberi:**
+            - < 0.4: Zayıf uyum (kırmızı)
+            - 0.4 - 0.6: Orta düzeyde uyum (turuncu)
+            - 0.6 - 0.8: İyi uyum (yeşil)
+            - > 0.8: Çok iyi uyum (mavi)
+            """)
+        
+        with tab2:
+            st.subheader("Ortalama Puanlar Karşılaştırması")
+            
+            # Ortalama puanlar için çubuk grafik
+            fig, ax = plt.subplots(figsize=(10, 6))
+            x = np.arange(len(feature_names))
+            width = 0.35
+            
+            # Ortalama puanları göster
+            ax.bar(x - width/2, [mean_scores_rad1[f] for f in feature_cols], width, label='Radyolog 1')
+            ax.bar(x + width/2, [mean_scores_rad2[f] for f in feature_cols], width, label='Radyolog 2')
+            
+            ax.set_xticks(x)
+            ax.set_xticklabels(feature_names, rotation=45, ha='right')
+            ax.set_ylim([0, 5])
+            ax.set_ylabel('Ortalama Puan')
+            ax.set_title('Özelliğe Göre Ortalama Anatomik Olabilirlik Puanları')
+            ax.legend()
+            
+            st.pyplot(fig)
+        
+        with tab3:
+            st.subheader("Detaylı Veri Analizi")
+            
+            # Puan dağılımı ısı haritası
+            st.subheader("Puan Dağılımı (%)")
+            
+            # Her özellik için puan dağılımını hesapla
+            score_distributions = {}
+            for feature in feature_cols:
+                # Her iki radyologdan puanları birleştir
+                all_scores = list(merged[f"{feature}_rad1"]) + list(merged[f"{feature}_rad2"])
+                score_distributions[feature] = np.bincount(all_scores, minlength=6)[1:]  # 1-5 puanlar
+            
+            # Isı haritası oluştur
+            data = np.array([score_distributions[f] for f in feature_cols])
+            # Yüzdelere dönüştür
+            data_percent = (data / data.sum(axis=1)[:, np.newaxis]) * 100
+            
+            fig, ax = plt.subplots(figsize=(10, 8))
+            sns.heatmap(data_percent, annot=True, fmt='.1f', cmap='YlGnBu', 
+                       xticklabels=['1', '2', '3', '4', '5'],
+                       yticklabels=feature_names, ax=ax)
+            
+            ax.set_title('Olabilirlik Puanları Dağılımı (Toplam %)')
+            ax.set_xlabel('5 Basamaklı Likert Ölçeğinde Puan')
+            
+            st.pyplot(fig)
+            
+            # Birleştirilmiş veri tablosunu göster
+            st.subheader("Birleştirilmiş Veri")
+            st.dataframe(merged)
+            
+            # Özet rapor oluştur
+            st.subheader("Özet Rapor")
+            
+            summary_text = """
+            # Anatomical Plausibility Assessment - Summary Report
+            ================================================
+            
+            ## Inter-rater agreement (Cohen's kappa) by feature:
+            """
+            
+            for feature, kappa in kappa_scores.items():
+                feature_name = feature.replace("_", " ").title()
+                summary_text += f"- {feature_name}: {kappa:.2f}\n"
+            
+            summary_text += "\n## Mean scores by radiologist:\n\n### Radiologist 1:\n"
+            for feature, score in mean_scores_rad1.items():
+                feature_name = feature.replace("_", " ").title()
+                summary_text += f"- {feature_name}: {score:.2f}\n"
+            
+            summary_text += "\n### Radiologist 2:\n"
+            for feature, score in mean_scores_rad2.items():
+                feature_name = feature.replace("_", " ").title()
+                summary_text += f"- {feature_name}: {score:.2f}\n"
+            
+            summary_text += "\n## Score distribution (count):\n"
+            for feature in feature_cols:
+                feature_name = feature.replace("_", " ").title()
+                summary_text += f"\n### {feature_name}:\n"
+                for score, count in enumerate(score_distributions[feature], start=1):
+                    summary_text += f"- Score {score}: {count}\n"
+            
+            st.markdown(summary_text)
+            
+            # Özet raporu indir
+            st.download_button(
+                label="Özet Raporu İndir",
+                data=summary_text,
+                file_name=f"apa_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                mime="text/markdown",
+            )
+    
+    except Exception as e:
+        st.error(f"Sonuçlar analiz edilirken hata oluştu: {e}")
+
+## GÖRSEL TURING TESTİ (VTT) FONKSİYONLARI ##
+
+def display_vtt_image():
+    """Görsel Turing Testi için görüntü göster"""
     if st.session_state.current_idx < len(st.session_state.all_images):
         # İlerleme bilgisi
         progress = int((st.session_state.current_idx / len(st.session_state.all_images)) * 100)
@@ -254,20 +890,20 @@ def display_current_image():
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("Gerçek", key=f"real_{st.session_state.current_idx}", use_container_width=True):
-                    record_classification("gerçek")
+                    record_vtt_classification("gerçek")
             with col2:
                 if st.button("Sentetik", key=f"synth_{st.session_state.current_idx}", use_container_width=True):
-                    record_classification("sentetik")
+                    record_vtt_classification("sentetik")
             
         except Exception as e:
             st.error(f"Görüntü gösterilemiyor: {e}")
             st.session_state.current_idx += 1
             st.rerun()
     else:
-        finish_evaluation()
+        finish_vtt_evaluation()
 
-def record_classification(classification):
-    """Radyoloğun sınıflandırmasını kaydet ve sonraki görüntüye geç"""
+def record_vtt_classification(classification):
+    """Görsel Turing Testi sınıflandırmasını kaydet"""
     if st.session_state.current_idx < len(st.session_state.all_images):
         # Sonucu kaydet
         img_data = st.session_state.all_images[st.session_state.current_idx]
@@ -316,140 +952,8 @@ def record_classification(classification):
         # Sayfayı yeniden yükle
         st.rerun()
 
-def initialize_app():
-    """Uygulamayı başlat ve görüntüleri yükle"""
-    st.header("Değerlendirmeyi Başlat")
-    
-    # Radyolog bilgileri
-    col1, col2 = st.columns(2)
-    with col1:
-        st.session_state.radiologist_id = st.text_input("Radyolog Kimliği:", value="", key="rad_id_input")
-    with col2:
-        tarih = datetime.now().strftime("%Y-%m-%d")
-        st.text_input("Tarih:", value=tarih, disabled=True)
-    
-    # Kimlik bilgilerini otomatik yükle
-    if hasattr(st, 'secrets') and 'google_service_account' in st.secrets:
-        st.success("☁️ Streamlit Cloud'da çalışıyor. Google Drive kimlik bilgileri secrets'dan yüklendi.")
-        credentials_json = dict(st.secrets["google_service_account"])
-        st.session_state.credentials_uploaded = True
-    else:
-        # Servis hesabı kimlik bilgileri
-        uploaded_file = st.file_uploader(
-            "Servis Hesabı Kimlik Bilgileri (JSON dosyası):",
-            type=["json"],
-            help="Google Cloud Console'dan indirdiğiniz servis hesabı anahtarı JSON dosyasını yükleyin."
-        )
-        
-        if uploaded_file is not None:
-            try:
-                # JSON dosyasını oku
-                credentials_json = uploaded_file.getvalue().decode('utf-8')
-                st.session_state.credentials_uploaded = True
-            except Exception as e:
-                st.error(f"Dosya okuma hatası: {e}")
-                st.session_state.credentials_uploaded = False
-    
-    # Yardım metni
-    st.info("""
-    **Nasıl Kullanılır?**
-    1. Radyolog kimliğinizi girin
-    2. Google Cloud'dan indirdiğiniz servis hesabı JSON dosyasını yükleyin
-    3. "Değerlendirmeyi Başlat" butonuna tıklayın
-    4. Her görüntüyü dikkatle inceleyin ve gerçek mi yoksa sentetik mi olduğunu belirtin
-    5. Değerlendirme sonuçlarınız otomatik olarak kaydedilecektir
-    """)
-    
-    # Başlatma butonu
-    if st.button("Değerlendirmeyi Başlat", key="start_button", use_container_width=True):
-        if not st.session_state.radiologist_id:
-            st.error("Lütfen Radyolog Kimliğinizi girin!")
-            return
-
-        if not st.session_state.credentials_uploaded:
-            st.error("Lütfen servis hesabı kimlik bilgilerini (JSON) yükleyin!")
-            return
-        
-        # Eğer görüntüler daha önce yüklenmediyse yükle
-        if not st.session_state.images_loaded:
-            with st.spinner("Google Drive bağlantısı kuruluyor..."):
-                drive_service = authenticate_google_drive(credentials_json)
-                
-                if not drive_service:
-                    st.error("Google Drive kimlik doğrulaması başarısız!")
-                    return
-                
-                # Klasörlerin varlığını kontrol et
-                real_files = list_files_in_folder(drive_service, st.session_state.real_folder_id)
-                synth_files = list_files_in_folder(drive_service, st.session_state.synth_folder_id)
-                
-                if not real_files:
-                    st.error(f"Gerçek görüntüler klasörüne erişilemiyor veya klasör boş! (ID: {st.session_state.real_folder_id})")
-                    return
-                
-                if not synth_files:
-                    st.error(f"Sentetik görüntüler klasörüne erişilemiyor veya klasör boş! (ID: {st.session_state.synth_folder_id})")
-                    return
-                
-                # Sonuçlar klasörünü kontrol et (eğer Drive'a kaydetme seçiliyse)
-                if st.session_state.save_to_drive:
-                    results_files = list_files_in_folder(drive_service, st.session_state.results_folder_id)
-                    if results_files is None:
-                        st.error(f"Sonuçlar klasörüne erişilemiyor! (ID: {st.session_state.results_folder_id})")
-                        return
-                
-                # Başarılı ise drive_service'i kaydet
-                st.session_state.drive_service = drive_service
-            
-            # Google Drive'dan görüntüleri yükle
-            with st.spinner("Görüntüler Google Drive'dan yükleniyor... (Bu işlem sadece bir kez yapılacak)"):
-                real_images = load_images_from_drive(
-                    st.session_state.drive_service, 
-                    st.session_state.real_folder_id, 
-                    'gerçek', 
-                    st.session_state.temp_dir
-                )
-                
-                synth_images = load_images_from_drive(
-                    st.session_state.drive_service, 
-                    st.session_state.synth_folder_id, 
-                    'sentetik', 
-                    st.session_state.temp_dir
-                )
-            
-            # Görüntü yükleme başarılı mı kontrol et
-            if not real_images or not synth_images:
-                st.error("Görüntüler yüklenemedi! Lütfen klasör ID'lerini kontrol edin.")
-                return
-            
-            # Görüntüleri birleştir ve karıştır
-            st.session_state.all_images = real_images + synth_images
-            
-            # Sistem zamanına dayalı gerçek rastgele tohum oluştur
-            import time
-            random.seed(time.time())
-            random.shuffle(st.session_state.all_images)
-            
-            # Görüntülerin yüklendiğini işaretle
-            st.session_state.images_loaded = True
-            st.success(f"Toplamda {len(st.session_state.all_images)} görüntü yüklendi!")
-        else:
-            st.success(f"Daha önce yüklenmiş {len(st.session_state.all_images)} görüntü kullanılacak.")
-        
-        st.session_state.initialized = True
-        
-        # Sonuç dosyasının adını oluştur
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        result_file_name = f"vtt_sonuclari_{st.session_state.radiologist_id}_{timestamp}.csv"
-        output_file = os.path.join(st.session_state.output_dir, result_file_name)
-        st.session_state.output_file = output_file
-        st.session_state.result_file_name = result_file_name
-        
-        st.success("Değerlendirmeye başlayabilirsiniz.")
-        st.rerun()
-
-def finish_evaluation():
-    """Değerlendirmeyi bitir ve sonuçları göster"""
+def finish_vtt_evaluation():
+    """Görsel Turing Testini bitir ve sonuçları göster"""
     if not st.session_state.completed:
         # Özet istatistikleri göster
         df = pd.DataFrame(st.session_state.results)
@@ -495,7 +999,7 @@ def finish_evaluation():
             plt.tight_layout()
             plt.savefig(graph_file_path)
             
-            # Grafiği Drive'a yükle (eğer Drive'a kaydetme seçiliyse)
+            # Grafiği Drive'a yükle
             if st.session_state.save_to_drive and st.session_state.results_folder_id:
                 graph_id = upload_file_to_drive(
                     st.session_state.drive_service,
@@ -511,7 +1015,7 @@ def finish_evaluation():
         st.balloons()  # Kutlama animasyonu
         st.success("🎉 Değerlendirme tamamlandı! Teşekkür ederiz.")
         
-        # Sonuçları yeni bir sekmeli arayüze yerleştir
+        # Sonuçları sekmeli arayüzde göster
         tab1, tab2, tab3 = st.tabs(["Özet", "Grafikler", "Detaylı Veriler"])
         
         with tab1:
@@ -581,7 +1085,7 @@ def finish_evaluation():
             
             # Veri çerçevesini göster
             show_df = df.copy()
-            show_df['image_path'] = show_df['image_path'].apply(lambda x: os.path.basename(x))  # sadece dosya adını göster
+            show_df['image_path'] = show_df['image_path'].apply(lambda x: os.path.basename(x))  # Sadece dosya adını göster
             show_df = show_df.rename(columns={
                 'radiologist_id': 'Radyolog',
                 'image_path': 'Görüntü',
@@ -620,11 +1124,37 @@ def finish_evaluation():
 # Yan panel ayarları
 with st.sidebar:
     st.image("https://img.freepik.com/free-vector/cardiology-concept-illustration_114360-6921.jpg", width=100)
-    st.header("Görsel Turing Testi")
+    st.header("Kardiyak Görüntü Değerlendirme")
     st.markdown("---")
     
+    # Test türü seçimi (eğer henüz başlatılmadıysa)
     if not st.session_state.initialized:
-        st.info("Değerlendirmeye başlamak için formu doldurun ve 'Değerlendirmeyi Başlat' butonuna tıklayın.")
+        st.subheader("Test Seçimi")
+        
+        test_selection = st.radio(
+            "Hangi testi yapmak istiyorsunuz?",
+            ["Seçiniz...", "Anatomik Olabilirlik Değerlendirmesi", "Görsel Turing Testi"],
+            index=0,
+            key="test_selection"
+        )
+        
+        # Test seçimine göre durumu ayarla
+        if test_selection == "Anatomik Olabilirlik Değerlendirmesi":
+            st.session_state.test_type = "apa"
+            st.info("""
+            **Anatomik Olabilirlik Değerlendirmesi**
+            
+            Bu test, sentetik kardiyak görüntülerin anatomik özelliklerini 1-5 ölçeğinde değerlendirmenizi sağlar.
+            """)
+        elif test_selection == "Görsel Turing Testi":
+            st.session_state.test_type = "vtt"
+            st.info("""
+            **Görsel Turing Testi**
+            
+            Bu test, kardiyak görüntülerin gerçek mi yoksa yapay zeka tarafından üretilmiş mi olduğunu ayırt etme yeteneğinizi değerlendirir.
+            """)
+        else:
+            st.session_state.test_type = None
         
         # Google Drive Bağlantı Durumu
         st.subheader("Google Drive Durumu")
@@ -632,18 +1162,51 @@ with st.sidebar:
             st.success("✅ Kimlik bilgileri yüklendi")
         else:
             st.warning("❌ Kimlik bilgileri yüklenmedi")
+        
+        # Sonuç analizi (APA için)
+        if st.session_state.test_type == "apa":
+            st.subheader("Sonuç Analizi")
+            if st.checkbox("İki radyolog sonucunu analiz et"):
+                rad1_file = st.file_uploader("Radyolog 1 CSV Dosyası:", type=["csv"])
+                rad2_file = st.file_uploader("Radyolog 2 CSV Dosyası:", type=["csv"])
+                
+                if rad1_file is not None and rad2_file is not None:
+                    # Yüklenen dosyaları geçici dizine kaydet
+                    rad1_path = os.path.join(st.session_state.temp_dir, "rad1_results.csv")
+                    rad2_path = os.path.join(st.session_state.temp_dir, "rad2_results.csv")
+                    
+                    with open(rad1_path, "wb") as f:
+                        f.write(rad1_file.getbuffer())
+                    
+                    with open(rad2_path, "wb") as f:
+                        f.write(rad2_file.getbuffer())
+                    
+                    if st.button("Sonuçları Analiz Et"):
+                        analyze_apa_results(rad1_path, rad2_path)
     else:
-        # Değerlendirme durumu
+        # Test süreci başlatıldıysa değerlendirme durumunu göster
         st.subheader("Değerlendirme Durumu")
         st.write(f"**Radyolog:** {st.session_state.radiologist_id}")
         st.write(f"**İlerleme:** {st.session_state.current_idx}/{len(st.session_state.all_images)} görüntü")
         
-        # İşlemleri göster
-        completed_real = sum(1 for r in st.session_state.results if r['classified_as'] == 'gerçek')
-        completed_synth = sum(1 for r in st.session_state.results if r['classified_as'] == 'sentetik')
-        
-        st.write(f"**Gerçek olarak değerlendirilen:** {completed_real}")
-        st.write(f"**Sentetik olarak değerlendirilen:** {completed_synth}")
+        # Test türüne özgü bilgiler
+        if st.session_state.test_type == "vtt":
+            # VTT için sınıflandırma istatistikleri
+            completed_real = sum(1 for r in st.session_state.results if r['classified_as'] == 'gerçek')
+            completed_synth = sum(1 for r in st.session_state.results if r['classified_as'] == 'sentetik')
+            
+            st.write(f"**Gerçek olarak değerlendirilen:** {completed_real}")
+            st.write(f"**Sentetik olarak değerlendirilen:** {completed_synth}")
+        elif st.session_state.test_type == "apa":
+            # APA için ortalama puanlar (eğer varsa sonuç)
+            if st.session_state.results:
+                st.subheader("Mevcut Ortalama Puanlar")
+                df = pd.DataFrame(st.session_state.results)
+                for feature in APA_FEATURES:
+                    feature_key = feature.replace(" ", "_").lower()
+                    if feature_key in df.columns:
+                        avg_score = np.mean(df[feature_key])
+                        st.write(f"**{feature}:** {avg_score:.2f}")
         
         # Drive'a kayıt durumu
         if st.session_state.save_to_drive:
@@ -664,7 +1227,11 @@ with st.sidebar:
                     st.session_state.all_images = []
                     st.session_state.completed = False
                     st.session_state.radiologist_id = ""
+                    st.session_state.test_type = None
                     st.session_state.drive_result_file_id = None
+                    # APA puanlarını sıfırla
+                    for feature in APA_FEATURES:
+                        st.session_state.ratings[feature] = 3
                     st.rerun()
             else:
                 st.session_state.initialized = False
@@ -673,12 +1240,16 @@ with st.sidebar:
                 st.session_state.all_images = []
                 st.session_state.completed = False
                 st.session_state.radiologist_id = ""
+                st.session_state.test_type = None
                 st.session_state.drive_result_file_id = None
+                # APA puanlarını sıfırla
+                for feature in APA_FEATURES:
+                    st.session_state.ratings[feature] = 3
                 st.rerun()
     
     # Uygulama bilgileri
     st.markdown("---")
-    st.caption("Görsel Turing Testi v1.0")
+    st.caption("Kardiyak Görüntü Değerlendirme Platformu v1.0")
     st.caption("© 2025 Streamlit ile geliştirilmiştir")
 
 # Ana uygulama mantığı
@@ -686,8 +1257,15 @@ if not st.session_state.initialized:
     # Uygulama henüz başlatılmadıysa, başlatma formunu göster
     initialize_app()
 else:
-    # Uygulama başlatıldıysa, değerlendirme arayüzünü göster
+    # Uygulama başlatıldıysa, test türüne göre değerlendirme arayüzünü göster
     if not st.session_state.completed:
-        display_current_image()
+        if st.session_state.test_type == "apa":
+            display_apa_image()
+        elif st.session_state.test_type == "vtt":
+            display_vtt_image()
     else:
-        finish_evaluation()
+        # Tamamlanmış değerlendirme için sonuçları göster
+        if st.session_state.test_type == "apa":
+            finish_apa_evaluation()
+        elif st.session_state.test_type == "vtt":
+            finish_vtt_evaluation()
