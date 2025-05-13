@@ -5,3 +5,7 @@ streamlit>=1.10.0
 Pillow>=9.0.0
 scikit-learn>=1.0.0
 pydicom>=2.3.0
+streamlit-gauth>=1.0.0
+gspread>=5.5.0
+google-auth>=2.10.0
+pydrive2>=1.10.0
