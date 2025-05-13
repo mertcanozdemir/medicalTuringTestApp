@@ -335,7 +335,7 @@ def initialize_app():
     # Eğer Streamlit Cloud üzerinde çalışıyorsa ve secrets yüklenmişse
     if hasattr(st, 'secrets') and 'google_service_account' in st.secrets:
         st.success("☁️ Streamlit Cloud'da çalışıyor. Google Drive kimlik bilgileri secrets'dan yüklendi.")
-        credentials_json = st.secrets["google_service_account"]
+        credentials_json = json.dumps(dict(st.secrets["google_service_account"]))
         st.session_state.credentials_uploaded = True
     else:
         # Servis hesabı kimlik bilgileri
