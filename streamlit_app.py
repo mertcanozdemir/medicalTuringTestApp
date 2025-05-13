@@ -114,21 +114,18 @@ def update_file_in_drive(drive_service, file_path, file_id, file_name=None):
         return None
 
 def authenticate_google_drive(credentials_json):
-    """Google Drive API ile kimlik doğrulama yap"""
     try:
-        credentials_dict = json.loads(credentials_json)
-        credentials = Credentials.from_service_account_info(
-            credentials_dict, scopes=SCOPES)
-        drive_service = build('drive', 'v3', credentials=credentials)
-        return drive_service
-    except Exception as e:
-        st.error(f"Google Drive kimlik doğrulama hatası: {e}")
-        return None
-
-def authenticate_google_drive(credentials_json):
-    """Google Drive API ile kimlik doğrulama yap"""
-    try:
-        credentials_dict = json.loads(credentials_json)
+        # Eğer zaten bir dictionary ise
+        if isinstance(credentials_json, dict):
+            credentials_dict = credentials_json
+        else:
+            # String ise JSON olarak parse et
+            credentials_dict = json.loads(credentials_json)
+        
+        # Özel anahtardaki kaçış karakterlerini düzelt
+        if 'private_key' in credentials_dict:
+            credentials_dict['private_key'] = credentials_dict['private_key'].replace('\\n', '\n')
+        
         credentials = Credentials.from_service_account_info(
             credentials_dict, scopes=SCOPES)
         drive_service = build('drive', 'v3', credentials=credentials)
