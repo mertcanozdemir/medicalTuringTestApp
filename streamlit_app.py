@@ -260,7 +260,7 @@ def display_current_image():
         except Exception as e:
             st.error(f"Görüntü gösterilemiyor: {e}")
             st.session_state.current_idx += 1
-            st.experimental_rerun()
+            st.rerun()
     else:
         finish_evaluation()
 
@@ -312,7 +312,7 @@ def record_classification(classification):
         st.session_state.current_idx += 1
         
         # Sayfayı yeniden yükle
-        st.experimental_rerun()
+        st.rerun()
 
 def initialize_app():
     """Uygulamayı başlat ve görüntüleri yükle"""
@@ -485,7 +485,7 @@ def initialize_app():
         st.session_state.result_file_name = result_file_name
         
         st.success(f"Toplamda {len(st.session_state.all_images)} görüntü yüklendi! Değerlendirmeye başlayabilirsiniz.")
-        st.experimental_rerun()
+        st.rerun()
 
 def finish_evaluation():
     """Değerlendirmeyi bitir ve sonuçları göster"""
@@ -652,7 +652,7 @@ def finish_evaluation():
             st.session_state.drive_result_file_id = None
             if hasattr(st.session_state, 'drive_graph_file_id'):
                 delattr(st.session_state, 'drive_graph_file_id')
-            st.experimental_rerun()
+            st.rerun()
         
         st.session_state.completed = True
 
@@ -719,7 +719,7 @@ with st.sidebar:
                     st.session_state.completed = False
                     st.session_state.radiologist_id = ""
                     st.session_state.drive_result_file_id = None
-                    st.experimental_rerun()
+                    st.rerun()
             else:
                 st.session_state.initialized = False
                 st.session_state.current_idx = 0
@@ -728,7 +728,7 @@ with st.sidebar:
                 st.session_state.completed = False
                 st.session_state.radiologist_id = ""
                 st.session_state.drive_result_file_id = None
-                st.experimental_rerun()
+                st.rerun()
     
     # Uygulama bilgileri
     st.markdown("---")
