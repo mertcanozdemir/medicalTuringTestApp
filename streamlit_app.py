@@ -37,29 +37,14 @@ def authenticate_gdrive():
     # 2. Yüklenen kimlik dosyası ile
     else:
         st.warning("Google Drive kimlik bilgileri bulunamadı!")
-        
-        # Check if we already have the file uploader in session state
-        if 'sa_uploader_key' not in st.session_state:
-            st.session_state.sa_uploader_key = f"service_account_uploader_{random.randint(1000, 9999)}"
-        
-        # Use the persistent key from session state
-        uploaded_file = st.file_uploader(
-            "Service Account JSON dosyasını yükleyin:", 
-            type=['json'],
-            key=st.session_state.sa_uploader_key
-        )
-        
+        uploaded_file = st.file_uploader("Service Account JSON dosyasını yükleyin:", type=['json'])
         if uploaded_file is not None:
-            try:
-                service_account_info = json.loads(uploaded_file.getvalue().decode('utf-8'))
-                credentials = Credentials.from_service_account_info(
-                    service_account_info,
-                    scopes=['https://www.googleapis.com/auth/drive']
-                )
-                drive_service = build('drive', 'v3', credentials=credentials)
-                return drive_service
-            except Exception as e:
-                st.error(f"Kimlik doğrulama hatası: {e}")
+            credentials = Credentials.from_service_account_info(
+                eval(uploaded_file.getvalue().decode('utf-8')),
+                scopes=['https://www.googleapis.com/auth/drive']
+            )
+            drive_service = build('drive', 'v3', credentials=credentials)
+            return drive_service
     return None
 
 # Oturum durumlarını kontrol et ve başlat
@@ -75,53 +60,35 @@ if 'initialized' not in st.session_state:
 # Google Drive'dan dosya/klasör listesi alma fonksiyonu
 def list_files_in_folder(drive_service, folder_id=None):
     """Google Drive'daki klasörün içindeki dosyaları listeler"""
-    if not drive_service:
-        return []
-        
-    try:
-        query = f"'{folder_id}' in parents" if folder_id else "'root' in parents"
-        query += " and trashed = false"
-        
-        results = drive_service.files().list(
-            q=query,
-            pageSize=1000,
-            fields="nextPageToken, files(id, name, mimeType)"
-        ).execute()
-        
-        return results.get('files', [])
-    except Exception as e:
-        st.error(f"Dosya listeleme hatası: {e}")
-        return []
+    query = f"'{folder_id}' in parents" if folder_id else "'root' in parents"
+    query += " and trashed = false"
+    
+    results = drive_service.files().list(
+        q=query,
+        pageSize=1000,
+        fields="nextPageToken, files(id, name, mimeType)"
+    ).execute()
+    
+    return results.get('files', [])
 
 # Görüntü yükleme fonksiyonu (Google Drive'dan)
 def download_file(drive_service, file_id, file_name):
     """Google Drive'dan dosyayı indir ve temp dosya olarak kaydet"""
-    if not drive_service:
-        return None
-        
-    try:
-        request = drive_service.files().get_media(fileId=file_id)
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name)[1]) as temp_file:
-            downloader = MediaIoBaseDownload(temp_file, request)
-            done = False
-            while not done:
-                status, done = downloader.next_chunk()
-        
-        return temp_file.name
-    except Exception as e:
-        st.error(f"Dosya indirme hatası ({file_name}): {e}")
-        return None
+    request = drive_service.files().get_media(fileId=file_id)
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name)[1]) as temp_file:
+        downloader = MediaIoBaseDownload(temp_file, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+    
+    return temp_file.name
 
 # Ana fonksiyonlar
 def load_images_from_drive(drive_service, folder_id, img_type):
     """Google Drive klasöründen görüntüleri gerçek türleriyle yükle"""
     images = []
     image_files = []
-    
-    if not drive_service or not folder_id:
-        st.error("Google Drive bağlantısı veya klasör ID'si eksik.")
-        return []
     
     # Klasördeki tüm dosyaları listele
     try:
@@ -135,10 +102,6 @@ def load_images_from_drive(drive_service, folder_id, img_type):
                 })
     except Exception as e:
         st.error(f"Google Drive klasörü listelenirken hata oluştu: {e}")
-        return []
-    
-    if not image_files:
-        st.warning(f"Klasörde görüntü dosyası bulunamadı ({img_type} görüntüler).")
         return []
     
     # 50'den fazla görüntü varsa, rastgele 50 tane seç
@@ -162,8 +125,6 @@ def load_images_from_drive(drive_service, folder_id, img_type):
             try:
                 # Dosyayı geçici olarak indir
                 temp_file_path = download_file(drive_service, file_id, file_name)
-                if not temp_file_path:
-                    continue
                 
                 # Standart görüntü formatları için
                 try:
@@ -178,8 +139,6 @@ def load_images_from_drive(drive_service, folder_id, img_type):
                     })
                 except Exception as e:
                     st.warning(f"Görüntü dosyası yüklenirken hata oluştu {file_name}: {e}")
-                    if os.path.exists(temp_file_path):
-                        os.unlink(temp_file_path)
             except Exception as e:
                 st.warning(f"Dosya indirirken hata oluştu {file_name}: {e}")
     
@@ -188,28 +147,20 @@ def load_images_from_drive(drive_service, folder_id, img_type):
 
 def upload_to_drive(drive_service, file_path, filename, folder_id=None):
     """Dosyayı Google Drive'a yükle"""
-    if not drive_service:
-        st.error("Google Drive bağlantısı eksik.")
-        return None
-        
-    try:
-        file_metadata = {
-            'name': filename
-        }
-        if folder_id:
-            file_metadata['parents'] = [folder_id]
-        
-        media = MediaFileUpload(file_path, resumable=True)
-        file = drive_service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields='id'
-        ).execute()
-        
-        return file.get('id')
-    except Exception as e:
-        st.error(f"Dosya yükleme hatası: {e}")
-        return None
+    file_metadata = {
+        'name': filename
+    }
+    if folder_id:
+        file_metadata['parents'] = [folder_id]
+    
+    media = MediaFileUpload(file_path, resumable=True)
+    file = drive_service.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields='id'
+    ).execute()
+    
+    return file.get('id')
 
 def initialize_app():
     """Uygulamayı başlat ve görüntüleri yükle"""
@@ -224,11 +175,6 @@ def initialize_app():
     st.session_state.radiologist_id = st.text_input("Radyolog Kimliğinizi Girin:", value="", key="rad_id_input")
     
     if st.session_state.radiologist_id:
-        # Klasör ID'lerini kontrol et
-        if not st.session_state.real_folder_id or not st.session_state.synth_folder_id or not st.session_state.results_folder_id:
-            st.error("Lütfen tüm Google Drive klasör ID'lerini girin.")
-            return
-            
         # Görüntüleri yükle
         with st.spinner("Görüntüler yükleniyor..."):
             real_folder_id = st.session_state.real_folder_id
@@ -237,18 +183,8 @@ def initialize_app():
             real_images = load_images_from_drive(st.session_state.drive_service, real_folder_id, 'real')
             synth_images = load_images_from_drive(st.session_state.drive_service, synth_folder_id, 'synthetic')
             
-            # Görüntü sayısını kontrol et
-            if not real_images and not synth_images:
-                st.error("Hiç görüntü yüklenemedi. Lütfen klasör ID'lerini kontrol edin.")
-                return
-            
             # Görüntüleri birleştir ve karıştır
             st.session_state.all_images = real_images + synth_images
-            
-            # Görüntü yoksa hata ver
-            if len(st.session_state.all_images) == 0:
-                st.error("Hiç görüntü yüklenemedi. Lütfen klasör ID'lerini kontrol edin.")
-                return
             
             # Sistem zamanına dayalı gerçek rastgele tohum oluştur
             import time
@@ -262,11 +198,6 @@ def initialize_app():
 
 def display_current_image():
     """Mevcut görüntüyü göster"""
-    # Görüntü yoksa uyarı ver
-    if len(st.session_state.all_images) == 0:
-        st.warning("Görüntü bulunamadı. Lütfen görüntü klasörlerini kontrol edin.")
-        return
-        
     if st.session_state.current_idx < len(st.session_state.all_images):
         img_data = st.session_state.all_images[st.session_state.current_idx]
         
@@ -294,14 +225,9 @@ def display_current_image():
             
         except Exception as e:
             st.error(f"Görüntü gösterilemiyor: {e}")
-            if st.button("Bu görüntüyü atla", key="skip_image"):
-                record_classification("hata")
+            record_classification("hata")
     else:
-        # Sonuçlar varsa değerlendirmeyi bitir
-        if st.session_state.results:
-            finish_evaluation()
-        else:
-            st.warning("Henüz değerlendirme yapılmadı.")
+        finish_evaluation()
 
 def record_classification(classification):
     """Radyoloğun sınıflandırmasını kaydet ve sonraki görüntüye geç"""
@@ -318,49 +244,37 @@ def record_classification(classification):
         }
         st.session_state.results.append(result)
         
-        try:
-            # Her değerlendirmeden sonra mevcut sonuçları geçici dosyaya kaydet
-            df = pd.DataFrame(st.session_state.results)
-            
-            # Geçici CSV dosyası oluştur
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as temp_file:
-                df.to_csv(temp_file.name, index=False)
-                temp_file_path = temp_file.name
-            
-            # Google Drive'a yükle (her adımda güncelle)
-            filename = f"vtt_sonuclari_{st.session_state.radiologist_id}.csv"
-            
-            # Mevcut sonuç dosyası varsa sil
-            if 'result_file_id' in st.session_state and st.session_state.result_file_id:
-                try:
-                    st.session_state.drive_service.files().delete(fileId=st.session_state.result_file_id).execute()
-                except:
-                    pass
-            
-            # Yeni dosyayı yükle
-            file_id = upload_to_drive(
-                st.session_state.drive_service, 
-                temp_file_path, 
-                filename, 
-                st.session_state.results_folder_id
-            )
-            
-            # Dosya ID'sini kaydet
-            if file_id:
-                st.session_state.result_file_id = file_id
-            
-            # Geçici dosyayı sil
-            if os.path.exists(temp_file_path):
-                os.unlink(temp_file_path)
-        except Exception as e:
-            st.error(f"Sonuç kaydetme hatası: {e}")
+        # Her değerlendirmeden sonra mevcut sonuçları geçici dosyaya kaydet
+        df = pd.DataFrame(st.session_state.results)
         
-        # Geçici görüntü dosyasını sil
-        try:
-            if os.path.exists(img_data['path']):
-                os.unlink(img_data['path'])
-        except:
-            pass
+        # Geçici CSV dosyası oluştur
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as temp_file:
+            df.to_csv(temp_file.name, index=False)
+            temp_file_path = temp_file.name
+        
+        # Google Drive'a yükle (her adımda güncelle)
+        filename = f"vtt_sonuclari_{st.session_state.radiologist_id}.csv"
+        
+        # Mevcut sonuç dosyası varsa sil
+        if 'result_file_id' in st.session_state:
+            try:
+                st.session_state.drive_service.files().delete(fileId=st.session_state.result_file_id).execute()
+            except:
+                pass
+        
+        # Yeni dosyayı yükle
+        file_id = upload_to_drive(
+            st.session_state.drive_service, 
+            temp_file_path, 
+            filename, 
+            st.session_state.results_folder_id
+        )
+        
+        # Dosya ID'sini kaydet
+        st.session_state.result_file_id = file_id
+        
+        # Geçici dosyayı sil
+        os.unlink(temp_file_path)
         
         # Sonraki görüntüye geç
         st.session_state.current_idx += 1
@@ -371,52 +285,44 @@ def record_classification(classification):
 def finish_evaluation():
     """Değerlendirmeyi bitir ve sonuçları göster"""
     if not st.session_state.completed:
-        # Sonuç yoksa uyarı ver
-        if not st.session_state.results:
-            st.warning("Henüz sonuç bulunmamaktadır. Lütfen en az bir görüntü değerlendirin.")
-            return
-            
-        try:
-            # Özet istatistikleri göster
-            df = pd.DataFrame(st.session_state.results)
-            accuracy = np.mean(df['correct']) * 100
-            
-            # Ek metrikleri hesapla ve göster
-            true_positive = np.sum((df['true_type'] == 'gerçek') & (df['classified_as'] == 'gerçek'))
-            false_positive = np.sum((df['true_type'] == 'sentetik') & (df['classified_as'] == 'gerçek'))
-            true_negative = np.sum((df['true_type'] == 'sentetik') & (df['classified_as'] == 'sentetik'))
-            false_negative = np.sum((df['true_type'] == 'gerçek') & (df['classified_as'] == 'sentetik'))
-            
-            sensitivity = true_positive / (true_positive + false_negative) if (true_positive + false_negative) > 0 else 0
-            specificity = true_negative / (true_negative + false_positive) if (true_negative + false_positive) > 0 else 0
-            
-            st.success("Değerlendirme tamamlandı!")
-            
-            st.subheader("Sonuçlar")
-            st.write(f"Genel doğruluk: %{accuracy:.2f}")
-            st.write(f"Duyarlılık (gerçek görüntüleri doğru tanımlama): {sensitivity:.2f}")
-            st.write(f"Özgüllük (sentetik görüntüleri doğru tanımlama): {specificity:.2f}")
-            
-            # Sonuç grafiği
-            fig, ax = plt.subplots(figsize=(10, 6))
-            ax.bar(['Gerçek', 'Sentetik'], [sensitivity, specificity])
-            ax.set_ylim([0, 1])
-            ax.set_ylabel('Doğruluk Oranı')
-            ax.set_title('Görüntü Türüne Göre Doğruluk')
-            
-            # Grafiği göster
-            st.pyplot(fig)
-            
-            # Son sonuç dosyasına bağlantı
-            if 'result_file_id' in st.session_state and st.session_state.result_file_id:
-                file_id = st.session_state.result_file_id
-                st.write(f"Sonuç dosyası Google Drive'a kaydedildi. ID: {file_id}")
-                file_link = f"https://drive.google.com/file/d/{file_id}/view"
-                st.markdown(f"[Sonuç dosyasını Google Drive'da görüntüle]({file_link})")
-            
-            st.session_state.completed = True
-        except Exception as e:
-            st.error(f"Sonuç değerlendirme hatası: {e}")
+        # Özet istatistikleri göster
+        df = pd.DataFrame(st.session_state.results)
+        accuracy = np.mean(df['correct']) * 100
+        
+        # Ek metrikleri hesapla ve göster
+        true_positive = np.sum((df['true_type'] == 'gerçek') & (df['classified_as'] == 'gerçek'))
+        false_positive = np.sum((df['true_type'] == 'sentetik') & (df['classified_as'] == 'gerçek'))
+        true_negative = np.sum((df['true_type'] == 'sentetik') & (df['classified_as'] == 'sentetik'))
+        false_negative = np.sum((df['true_type'] == 'gerçek') & (df['classified_as'] == 'sentetik'))
+        
+        sensitivity = true_positive / (true_positive + false_negative) if (true_positive + false_negative) > 0 else 0
+        specificity = true_negative / (true_negative + false_positive) if (true_negative + false_positive) > 0 else 0
+        
+        st.success("Değerlendirme tamamlandı!")
+        
+        st.subheader("Sonuçlar")
+        st.write(f"Genel doğruluk: %{accuracy:.2f}")
+        st.write(f"Duyarlılık (gerçek görüntüleri doğru tanımlama): {sensitivity:.2f}")
+        st.write(f"Özgüllük (sentetik görüntüleri doğru tanımlama): {specificity:.2f}")
+        
+        # Sonuç grafiği
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.bar(['Gerçek', 'Sentetik'], [sensitivity, specificity])
+        ax.set_ylim([0, 1])
+        ax.set_ylabel('Doğruluk Oranı')
+        ax.set_title('Görüntü Türüne Göre Doğruluk')
+        
+        # Grafiği göster
+        st.pyplot(fig)
+        
+        # Son sonuç dosyasına bağlantı
+        if 'result_file_id' in st.session_state:
+            file_id = st.session_state.result_file_id
+            st.write(f"Sonuç dosyası Google Drive'a kaydedildi. ID: {file_id}")
+            file_link = f"https://drive.google.com/file/d/{file_id}/view"
+            st.markdown(f"[Sonuç dosyasını Google Drive'da görüntüle]({file_link})")
+        
+        st.session_state.completed = True
 
 # Yan panel ayarları
 with st.sidebar:
@@ -439,39 +345,33 @@ with st.sidebar:
         # Folder ID'ler için girdi alanları
         st.session_state.real_folder_id = st.text_input(
             "Gerçek Görüntüler Klasörü ID:", 
-            value="",
-            help="Google Drive'daki gerçek görüntülerin bulunduğu klasörün ID'si",
-            key="real_folder_input"
+            value="real",
+            help="Google Drive'daki gerçek görüntülerin bulunduğu klasörün ID'si"
         )
         
         st.session_state.synth_folder_id = st.text_input(
             "Sentetik Görüntüler Klasörü ID:", 
-            value="",
-            help="Google Drive'daki sentetik görüntülerin bulunduğu klasörün ID'si",
-            key="synth_folder_input"
+            value="synthetic",
+            help="Google Drive'daki sentetik görüntülerin bulunduğu klasörün ID'si"
         )
         
         st.session_state.results_folder_id = st.text_input(
             "Sonuçlar Klasörü ID:", 
-            value="",
-            help="Google Drive'da sonuçların kaydedileceği klasörün ID'si",
-            key="results_folder_input"
+            value="results",
+            help="Google Drive'da sonuçların kaydedileceği klasörün ID'si"
         )
         
         # Drive'daki klasörleri göster
         if st.session_state.drive_service:
-            if st.button("Google Drive Klasörlerini Listele", key="list_folders_button"):
+            if st.button("Google Drive Klasörlerini Listele"):
                 files = list_files_in_folder(st.session_state.drive_service)
                 
                 # Sadece klasörleri filtrele
                 folders = [f for f in files if f.get('mimeType') == 'application/vnd.google-apps.folder']
                 
-                if folders:
-                    st.write("Erişilebilir klasörler:")
-                    for folder in folders:
-                        st.write(f"{folder.get('name')}: `{folder.get('id')}`")
-                else:
-                    st.warning("Erişilebilir klasör bulunamadı veya izinler yetersiz.")
+                st.write("Erişilebilir klasörler:")
+                for folder in folders:
+                    st.write(f"{folder.get('name')}: `{folder.get('id')}`")
     else:
         st.write(f"**Gerçek Görüntüler Klasörü ID:** {st.session_state.real_folder_id}")
         st.write(f"**Sentetik Görüntüler Klasörü ID:** {st.session_state.synth_folder_id}")
@@ -479,15 +379,7 @@ with st.sidebar:
     
     # Değerlendirmeyi sıfırla
     if st.session_state.initialized:
-        if st.button("Değerlendirmeyi Sıfırla", key="reset_button"):
-            # Geçici dosyaları temizle
-            for img in st.session_state.all_images:
-                try:
-                    if 'path' in img and os.path.exists(img['path']):
-                        os.unlink(img['path'])
-                except:
-                    pass
-                    
+        if st.button("Değerlendirmeyi Sıfırla"):
             st.session_state.initialized = False
             st.session_state.current_idx = 0
             st.session_state.results = []
@@ -506,10 +398,6 @@ if not st.session_state.initialized:
 else:
     # Uygulama başlatıldıysa, değerlendirme arayüzünü göster
     if not st.session_state.completed:
-        # Görüntü yoksa uyarı ver
-        if len(st.session_state.all_images) > 0:
-            display_current_image()
-        else:
-            st.warning("Görüntü bulunamadı. Lütfen görüntü klasörlerini kontrol edin.")
+        display_current_image()
     else:
         finish_evaluation()
