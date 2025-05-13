@@ -417,12 +417,12 @@ def display_apa_image():
             img = Image.open(img_data['path'])
             
             # Görüntüyü yeniden boyutlandır
-            img = img.resize((500, 350), Image.LANCZOS)
+            img = img.resize((250, 250), Image.LANCZOS)
             
             # Görüntüyü merkeze yerleştir
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
-                st.image(img, width=500)
+                st.image(img, width=250)
             
             # Değerlendirme talimatı
             st.info("Lütfen aşağıdaki özellikleri 1-5 ölçeğinde değerlendirin (1: Çok Kötü, 5: Mükemmel)")
