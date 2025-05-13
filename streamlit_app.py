@@ -326,14 +326,10 @@ def initialize_app():
         tarih = datetime.now().strftime("%Y-%m-%d")
         st.text_input("Tarih:", value=tarih, disabled=True)
     
-    # Google Drive ayarları
-    st.subheader("Google Drive Ayarları")
-    
-    # Eğer Streamlit Cloud üzerinde çalışıyorsa ve secrets yüklenmişse
+    # Kimlik bilgilerini otomatik yükle
     if hasattr(st, 'secrets') and 'google_service_account' in st.secrets:
         st.success("☁️ Streamlit Cloud'da çalışıyor. Google Drive kimlik bilgileri secrets'dan yüklendi.")
         credentials_json = dict(st.secrets["google_service_account"])
-
         st.session_state.credentials_uploaded = True
     else:
         # Servis hesabı kimlik bilgileri
@@ -352,51 +348,14 @@ def initialize_app():
                 st.error(f"Dosya okuma hatası: {e}")
                 st.session_state.credentials_uploaded = False
     
-    # Klasör ID'leri
-    col1, col2 = st.columns(2)
-    with col1:
-        st.session_state.real_folder_id = st.text_input(
-            "Gerçek Görüntüler Klasör ID:", 
-            value=st.session_state.real_folder_id,
-            help="Google Drive'daki gerçek görüntüleri içeren klasörün ID'si"
-        )
-    with col2:
-        st.session_state.synth_folder_id = st.text_input(
-            "Sentetik Görüntüler Klasör ID:",
-            value=st.session_state.synth_folder_id,
-            help="Google Drive'daki sentetik görüntüleri içeren klasörün ID'si"
-        )
-    
-    # Sonuç ayarları
-    st.subheader("Sonuç Ayarları")
-    
-    # Drive Sonuç klasörü
-    st.session_state.results_folder_id = st.text_input(
-        "Sonuçlar Klasör ID:", 
-        value=st.session_state.results_folder_id,
-        help="Google Drive'da sonuçların kaydedileceği klasörün ID'si"
-    )
-    
-    st.session_state.save_to_drive = st.checkbox(
-        "Sonuçları Google Drive'a da kaydet", 
-        value=True,
-        help="İşaretliyse, sonuçlar hem yerel olarak hem de Google Drive'da belirtilen klasöre kaydedilir."
-    )
-    
-    # Yerel Sonuç dizini
-    with st.expander("Yerel Sonuç Dizini"):
-        st.session_state.output_dir = st.text_input("Sonuç Dizini:", 
-                                                  value=DEFAULT_OUTPUT_DIR, key="output_dir_input")
-        os.makedirs(st.session_state.output_dir, exist_ok=True)
-    
     # Yardım metni
     st.info("""
     **Nasıl Kullanılır?**
     1. Radyolog kimliğinizi girin
     2. Google Cloud'dan indirdiğiniz servis hesabı JSON dosyasını yükleyin
-    3. Google Drive'daki görüntü klasörlerinin ID'lerini girin
-    4. Sonuçların kaydedileceği Google Drive klasör ID'sini girin
-    5. "Değerlendirmeyi Başlat" butonuna tıklayın
+    3. "Değerlendirmeyi Başlat" butonuna tıklayın
+    4. Her görüntüyü dikkatle inceleyin ve gerçek mi yoksa sentetik mi olduğunu belirtin
+    5. Değerlendirme sonuçlarınız otomatik olarak kaydedilecektir
     """)
     
     # Başlatma butonu
@@ -409,14 +368,6 @@ def initialize_app():
             st.error("Lütfen servis hesabı kimlik bilgilerini (JSON) yükleyin!")
             return
         
-        if not st.session_state.real_folder_id or not st.session_state.synth_folder_id:
-            st.error("Lütfen her iki görüntü klasör ID'sini de girin!")
-            return
-        
-        if st.session_state.save_to_drive and not st.session_state.results_folder_id:
-            st.error("Lütfen sonuçlar klasör ID'sini girin veya Drive'a kaydetme seçeneğini kapatın!")
-            return
-            
         with st.spinner("Google Drive bağlantısı kuruluyor..."):
             drive_service = authenticate_google_drive(credentials_json)
             
@@ -671,21 +622,6 @@ with st.sidebar:
             st.success("✅ Kimlik bilgileri yüklendi")
         else:
             st.warning("❌ Kimlik bilgileri yüklenmedi")
-            
-        if st.session_state.real_folder_id != DEFAULT_REAL_FOLDER_ID:
-            st.success(f"✅ Gerçek görüntü klasörü: {st.session_state.real_folder_id[:5]}...")
-        else:
-            st.warning("❌ Gerçek görüntü klasörü: Ayarlanmadı")
-            
-        if st.session_state.synth_folder_id != DEFAULT_SYNTHETIC_FOLDER_ID:
-            st.success(f"✅ Sentetik görüntü klasörü: {st.session_state.synth_folder_id[:5]}...")
-        else:
-            st.warning("❌ Sentetik görüntü klasörü: Ayarlanmadı")
-            
-        if st.session_state.results_folder_id != DEFAULT_RESULTS_FOLDER_ID:
-            st.success(f"✅ Sonuçlar klasörü: {st.session_state.results_folder_id[:5]}...")
-        else:
-            st.warning("❌ Sonuçlar klasörü: Ayarlanmadı")
     else:
         # Değerlendirme durumu
         st.subheader("Değerlendirme Durumu")
