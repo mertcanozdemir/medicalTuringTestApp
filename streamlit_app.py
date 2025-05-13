@@ -288,43 +288,35 @@ def finish_evaluation():
     """Değerlendirmeyi bitir ve sonuçları göster"""
     if not st.session_state.completed:
         # Özet istatistikleri göster
+        if not st.session_state.results:
+            st.warning("Henüz sonuç bulunmuyor. Lütfen önce değerlendirme yapın.")
+            st.session_state.completed = True
+            return
+            
         df = pd.DataFrame(st.session_state.results)
+        
+        # Debug information
+        st.write("Kaydedilen sonuç sayısı:", len(df))
+        st.write("Mevcut sütunlar:", df.columns.tolist())
+        
+        # Check if 'correct' column exists
+        if 'correct' not in df.columns:
+            st.error("Sonuçlarda 'correct' sütunu bulunamadı.")
+            
+            # Try to create the correct column if classified_as and true_type exist
+            if 'classified_as' in df.columns and 'true_type' in df.columns:
+                df['correct'] = df.apply(
+                    lambda row: row['true_type'] == row['classified_as'] 
+                    if row['classified_as'] != "hata" else False, 
+                    axis=1
+                )
+                st.success("'correct' sütunu oluşturuldu.")
+            else:
+                st.session_state.completed = True
+                return
+        
         accuracy = np.mean(df['correct']) * 100
-        
-        # Ek metrikleri hesapla ve göster
-        true_positive = np.sum((df['true_type'] == 'gerçek') & (df['classified_as'] == 'gerçek'))
-        false_positive = np.sum((df['true_type'] == 'sentetik') & (df['classified_as'] == 'gerçek'))
-        true_negative = np.sum((df['true_type'] == 'sentetik') & (df['classified_as'] == 'sentetik'))
-        false_negative = np.sum((df['true_type'] == 'gerçek') & (df['classified_as'] == 'sentetik'))
-        
-        sensitivity = true_positive / (true_positive + false_negative) if (true_positive + false_negative) > 0 else 0
-        specificity = true_negative / (true_negative + false_positive) if (true_negative + false_positive) > 0 else 0
-        
-        st.success("Değerlendirme tamamlandı!")
-        
-        st.subheader("Sonuçlar")
-        st.write(f"Genel doğruluk: %{accuracy:.2f}")
-        st.write(f"Duyarlılık (gerçek görüntüleri doğru tanımlama): {sensitivity:.2f}")
-        st.write(f"Özgüllük (sentetik görüntüleri doğru tanımlama): {specificity:.2f}")
-        
-        # Sonuç grafiği
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.bar(['Gerçek', 'Sentetik'], [sensitivity, specificity])
-        ax.set_ylim([0, 1])
-        ax.set_ylabel('Doğruluk Oranı')
-        ax.set_title('Görüntü Türüne Göre Doğruluk')
-        
-        # Grafiği göster
-        st.pyplot(fig)
-        
-        # Son sonuç dosyasına bağlantı
-        if 'result_file_id' in st.session_state:
-            file_id = st.session_state.result_file_id
-            st.write(f"Sonuç dosyası Google Drive'a kaydedildi. ID: {file_id}")
-            file_link = f"https://drive.google.com/file/d/{file_id}/view"
-            st.markdown(f"[Sonuç dosyasını Google Drive'da görüntüle]({file_link})")
-        
-        st.session_state.completed = True
+   
 
 # Yan panel ayarları
 with st.sidebar:
