@@ -14,16 +14,7 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 import json
-# Servis hesabı kimlik bilgilerini Streamlit Secrets'tan almak için:
-import streamlit as st
 
-# Eğer Streamlit Cloud üzerinde çalışıyorsa, secrets'tan al
-if "google_service_account" in st.secrets:
-    credentials_json = st.secrets["google_service_account"]["default"]
-    # Credentials JSON'ı kullanmak için session_state'e kaydet
-    if 'credentials_uploaded' not in st.session_state:
-        st.session_state.credentials_uploaded = True
-        
 # Uygulama başlığı ve açıklaması
 st.set_page_config(page_title="Görsel Turing Testi", layout="wide")
 st.title("Görsel Turing Testi - Kardiyak Görüntüler")
@@ -36,8 +27,8 @@ DEFAULT_OUTPUT_DIR = r"C:\Users\Mertcan\Desktop\gata-yazilim\results"
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 
 # Google Drive klasör ID'leri
-DEFAULT_REAL_FOLDER_ID = "gerçek-görüntüler-klasör-id"  # Gerçek klasör ID'si ile değiştirin
-DEFAULT_SYNTHETIC_FOLDER_ID = "sentetik-görüntüler-klasör-id"  # Sentetik klasör ID'si ile değiştirin
+DEFAULT_REAL_FOLDER_ID = "1XJgpXqdVSfOIriECXwXuwccs3N0KiqQ_"  # Gerçek klasör ID'si ile değiştirin
+DEFAULT_SYNTHETIC_FOLDER_ID = "1iGykeA2-cG68wj-4xZDXLp6CH4DcisLo"  # Sentetik klasör ID'si ile değiştirin
 
 # Oturum durumlarını kontrol et ve başlat
 if 'initialized' not in st.session_state:
@@ -310,7 +301,7 @@ def initialize_app():
         st.session_state.output_file = output_file
         
         st.success(f"Toplamda {len(st.session_state.all_images)} görüntü yüklendi! Değerlendirmeye başlayabilirsiniz.")
-        st.experimental_rerun()
+        st.rerun()
 
 def display_current_image():
     """Mevcut görüntüyü göster"""
@@ -349,7 +340,7 @@ def display_current_image():
         except Exception as e:
             st.error(f"Görüntü gösterilemiyor: {e}")
             st.session_state.current_idx += 1
-            st.experimental_rerun()
+            st.rerun()
     else:
         finish_evaluation()
 
@@ -456,7 +447,7 @@ def finish_evaluation():
             st.session_state.all_images = []
             st.session_state.completed = False
             st.session_state.radiologist_id = ""
-            st.experimental_rerun()
+            st.rerun()
         
         st.session_state.completed = True
 
@@ -486,7 +477,7 @@ def record_classification(classification):
         st.session_state.current_idx += 1
         
         # Sayfayı yeniden yükle
-        st.experimental_rerun()
+        st.rerun()
 
 # Yan panel ayarları
 with st.sidebar:
@@ -538,7 +529,7 @@ with st.sidebar:
                     st.session_state.all_images = []
                     st.session_state.completed = False
                     st.session_state.radiologist_id = ""
-                    st.experimental_rerun()
+                    st.rerun()
             else:
                 st.session_state.initialized = False
                 st.session_state.current_idx = 0
@@ -546,7 +537,7 @@ with st.sidebar:
                 st.session_state.all_images = []
                 st.session_state.completed = False
                 st.session_state.radiologist_id = ""
-                st.experimental_rerun()
+                st.rerun()
     
     # Uygulama bilgileri
     st.markdown("---")
